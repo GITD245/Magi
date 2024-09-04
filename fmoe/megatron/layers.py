@@ -80,7 +80,7 @@ class MegatronMLP(FMoETransformerMLP):
             moe_group = None
         else:
             world_size = args.data_parallel_size
-            from megatron.mpu import get_data_parallel_group
+            from megatron.mpu import get_data_parallel_group # type: ignore
             moe_group = get_data_parallel_group()
 
         if not args.balance_strategy or args.balance_strategy == "naive":
@@ -146,7 +146,7 @@ class MegatronMLP(FMoETransformerMLP):
             _megatron_init_method(self.experts.h4toh, rng, std)
 
     def forward(self, inp):
-        from megatron import mpu
+        from megatron import mpu # type: ignore
         x = super().forward(inp)
         x = mpu.reduce_from_tensor_model_parallel_region(x)
         return (
@@ -175,7 +175,7 @@ def fmoefy(
     small models that do not require high training throughput or large parameter
     capacity.
     """
-    from megatron import get_args
+    from megatron import get_args # type: ignore
 
     args = get_args()
 

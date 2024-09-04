@@ -14,8 +14,8 @@ def get_fmoe_checkpoint_name(
     checkpoints_path, iteration, release=False, data_parallel_rank=-1
 ):
     """A unified checkpoint name, allowing specifying a data parallel rank"""
-    from megatron import mpu
-    from megatron.checkpointing import get_checkpoint_name
+    from megatron import mpu # type: ignore
+    from megatron.checkpointing import get_checkpoint_name # type: ignore
 
     if data_parallel_rank == -1:
         data_parallel_rank = mpu.get_data_parallel_rank()
@@ -51,16 +51,16 @@ def get_fmoe_checkpoint_name(
 def save_checkpoint(iteration, model, optimizer, lr_scheduler):
     """Save a model checkpoint with expert parallel """
     # TODO: update patch
-    from megatron import get_args
-    from megatron import mpu
-    from megatron import print_rank_last
-    from megatron import utils
+    from megatron import get_args # type: ignore
+    from megatron import mpu # type: ignore
+    from megatron import print_rank_last # type: ignore
+    from megatron import utils # type: ignore
 
     expert_dp_comm = "none"
 
     if mpu.get_data_parallel_rank() == 0:
         # at dp rank 0, we still follows the native load_checkpoint by megatron
-        from megatron.checkpointing import save_checkpoint as save_checkpoint_native
+        from megatron.checkpointing import save_checkpoint as save_checkpoint_native # type: ignore
 
         save_checkpoint_native(iteration, model, optimizer, lr_scheduler)
         return
@@ -150,8 +150,8 @@ def save_checkpoint(iteration, model, optimizer, lr_scheduler):
 
     # Save.
     checkpoint_name = get_fmoe_checkpoint_name(args.save, iteration)
-    from megatron.checkpointing import ensure_directory_exists
-    from megatron.checkpointing import get_checkpoint_tracker_filename
+    from megatron.checkpointing import ensure_directory_exists # type: ignore
+    from megatron.checkpointing import get_checkpoint_tracker_filename # type: ignore
 
     ensure_directory_exists(checkpoint_name)
     torch.save(state_dict, checkpoint_name)
@@ -219,18 +219,18 @@ def merge_state_dict(state_dict_rank0, state_dict_local, fp16):
 def load_checkpoint(model, optimizer, lr_scheduler, load_arg="load"):
     """Load a model checkpoint and return the iteration."""
 
-    from megatron import get_args
-    from megatron import mpu
-    from megatron import print_rank_last
-    from megatron import utils
-    from megatron.checkpointing import get_checkpoint_tracker_filename
-    from megatron.checkpointing import set_checkpoint_version
-    from megatron.checkpointing import check_checkpoint_args
-    from megatron.checkpointing import update_num_microbatches
+    from megatron import get_args # type: ignore
+    from megatron import mpu # type: ignore
+    from megatron import print_rank_last # type: ignore
+    from megatron import utils # type: ignore
+    from megatron.checkpointing import get_checkpoint_tracker_filename # type: ignore
+    from megatron.checkpointing import set_checkpoint_version # type: ignore
+    from megatron.checkpointing import check_checkpoint_args # type: ignore
+    from megatron.checkpointing import update_num_microbatches # type: ignore
 
     if mpu.get_data_parallel_rank() == 0:
         # at dp rank 0, we still follow the native load_checkpoint by megatron
-        from megatron.checkpointing import load_checkpoint as load_checkpoint_native
+        from megatron.checkpointing import load_checkpoint as load_checkpoint_native # type: ignore
 
         return load_checkpoint_native(model, optimizer, lr_scheduler, load_arg)
 
@@ -298,7 +298,7 @@ def load_checkpoint(model, optimizer, lr_scheduler, load_arg="load"):
         try:
             state_dict = torch.load(checkpoint_name, map_location="cpu")
         except ModuleNotFoundError:
-            from megatron.fp16_deprecated import loss_scaler
+            from megatron.fp16_deprecated import loss_scaler # type: ignore
 
             # For backward compatibility.
             print_rank_last(" > deserializing using the old code structure ...")

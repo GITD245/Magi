@@ -12,7 +12,7 @@ num_layers = 0
 
 
 def reset_gate_hook(_num_layers=None):
-    from megatron import get_args
+    from megatron import get_args # type: ignore
 
     global balance_dict, num_layers
     if _num_layers is not None:
@@ -26,7 +26,7 @@ def get_balance_profile():
 
 
 def generate_megatron_gate_hook(layer_idx, num_expert_global):
-    from megatron import get_args
+    from megatron import get_args # type: ignore
 
     balance_strategy = get_args().balance_strategy
 
@@ -49,7 +49,7 @@ def add_balance_log(model, writer, iteration):
     r"""
     Note that this function does not work with pipeline parallelism
     """
-    from megatron import is_last_rank
+    from megatron import is_last_rank # type: ignore
 
     while hasattr(model, 'module'):
         model = model.module

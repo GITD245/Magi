@@ -8,10 +8,10 @@ def patch_loss_func_v2_5(loss_func):
     Patch model's loss_func to support balance loss
     """
 
-    from megatron.mpu import is_pipeline_last_stage
-    from megatron.mpu import get_tensor_model_parallel_group
-    from megatron import get_args
-    from megatron import get_num_microbatches
+    from megatron.mpu import is_pipeline_last_stage # type: ignore
+    from megatron.mpu import get_tensor_model_parallel_group # type: ignore
+    from megatron import get_args # type: ignore
+    from megatron import get_num_microbatches # type: ignore
 
     if not get_args().balance_strategy:
         return loss_func
@@ -66,9 +66,9 @@ def patch_forward_step(forward_step_func, Megatron_Version="v2.2"):
     Patch model's forward_step_func to support balance loss
     """
 
-    from megatron.mpu import is_pipeline_last_stage
-    from megatron.mpu import get_tensor_model_parallel_group
-    from megatron import get_args
+    from megatron.mpu import is_pipeline_last_stage # type: ignore
+    from megatron.mpu import get_tensor_model_parallel_group # type: ignore
+    from megatron import get_args # type: ignore
 
     if not get_args().balance_strategy:
         return forward_step_func
@@ -133,7 +133,7 @@ def patch_forward_step(forward_step_func, Megatron_Version="v2.2"):
 
 
 def patch_model_provider(model_provider, gate=None, Megatron_Version='v2.2'):
-    from megatron import get_args
+    from megatron import get_args # type: ignore
 
     def fmoefied_model_provider_v2_2():
         from .layers import fmoefy

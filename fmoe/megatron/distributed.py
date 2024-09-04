@@ -19,8 +19,8 @@ def get_moe_group():
 
 
 def _init():
-    from megatron import get_args
-    from megatron import mpu
+    from megatron import get_args # type: ignore
+    from megatron import mpu # type: ignore
     args = get_args()
 
     # Create a comm prependicular to the pipeline group as gate group
