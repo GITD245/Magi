@@ -17,6 +17,16 @@
 #define FMOE_SWE(__s__,__e__) cudaStreamWaitEvent(__s__,__e__)
 #endif
 
+#define CUDA_CHECK(call)                                                        \
+    {                                                                           \
+        cudaError_t err = call;                                               \
+        if (err != cudaSuccess) {                                            \
+            std::cerr << "CUDA Error in " << __FILE__ << " at line " << __LINE__ << ": " \
+                      << cudaGetErrorString(err) << std::endl;              \
+            exit(err);                                                        \
+        }                                                                      \
+    }
+
 template<typename scalar_t>
 void exchangeWith(
         const scalar_t* sendbuf, size_t sendcount, int t_send,
@@ -81,7 +91,7 @@ void computePtrs(long num_expert, long rank, long world_size,
 
 
 template<typename scalar_t>
-void computeFn(py::function fn, c10::Device device,
+void computeFn(py::function fn, c10::Device device, 
         scalar_t* inp_buf, scalar_t* out_buf,
         long expert_idx, long store_idx, long offset, long micro_batch_size, long d_model,
         CudaStreamManager* smgr) {
@@ -140,14 +150,24 @@ void fmoe_cuda_fused_forward_impl(
     cudaEvent_t *input_ready = new cudaEvent_t[n_groups];
     cudaEvent_t *output_ready = new cudaEvent_t[n_groups];
     cudaEvent_t *output_torch_ready = new cudaEvent_t[n_groups];
+    cudaEvent_t *stime_start = new cudaEvent_t[n_groups];
+    cudaEvent_t *ctime_start = new cudaEvent_t[n_groups];
+    cudaEvent_t *rtime_start = new cudaEvent_t[n_groups];
+    cudaEvent_t *rtime_end = new cudaEvent_t[n_groups];
+
     for (long i = 0; i < n_groups; ++i) {
         cudaEventCreate(input_ready + i);
         cudaEventCreate(output_ready + i);
         cudaEventCreate(output_torch_ready + i);
+        cudaEventCreate(stime_start + i);
+        cudaEventCreate(ctime_start + i);
+        cudaEventCreate(rtime_start + i);
+        cudaEventCreate(rtime_end + i);
     }
 
     // S_0 ... S_n
     for (long step = 0; step < n_groups; ++step) {
+        cudaEventRecord(stime_start[step], smgr->stream(num_expert));
         for (long ei = 0; ei < num_expert; ++ei) {
             GEN_BASE(step);
             NCCL_SAFE_CALL(ncclGroupStart());
@@ -164,9 +184,9 @@ void fmoe_cuda_fused_forward_impl(
             NCCL_SAFE_CALL(ncclGroupEnd());
         }
         cudaEventRecord(input_ready[step], smgr->stream(num_expert));
+        cudaEventSynchronize(input_ready[step]);
     }
 
-    // Broadcast shadowed experts
     cudaEvent_t evt_get, *evt_shadow;
     if (params.size() > 0) {
         evt_shadow = new cudaEvent_t[params.size()];
@@ -192,6 +212,7 @@ void fmoe_cuda_fused_forward_impl(
     for (long step = 0; step < n_groups; ++step) {
         FMOE_SWE(smgr->stream(0), input_ready[step]);
         FMOE_SWE(smgr->torchStream(), input_ready[step]);
+        cudaEventRecord(ctime_start[step], smgr->stream(0));
         for (int ei = 0; ei < num_expert; ++ei) {
             GEN_BASE(step);
             long offset = global_ptr[ei * world_size + from_base];
@@ -202,6 +223,7 @@ void fmoe_cuda_fused_forward_impl(
                     (long) ei, step * num_expert + ei, offset, micro_batch_size, d_model, smgr);
         }
         cudaEventRecord(output_ready[step], smgr->stream(0));
+        cudaEventSynchronize(output_ready[step]);
         cudaEventRecord(output_torch_ready[step], smgr->torchStream());
     }
 
@@ -210,7 +232,7 @@ void fmoe_cuda_fused_forward_impl(
         if (stored_models[i]) {
             FMOE_SWE(smgr->stream(0), evt_shadow[si]);
             FMOE_SWE(smgr->torchStream(), evt_shadow[si]);
-            stash_fn(params[si], si, 0); // always put shadowed expert at first, so expert_idx = 0
+            stash_fn(params[si], si, 0); // always put shadowed expert at first, so expert_idx = 0 save shadow_expert in expert0 ,original expert is put in expert_param_stash
             long offset = local_ptr[i];
             long micro_batch_size = local_expert_count[i];
             computeFn(forward_fn, device,
@@ -225,6 +247,7 @@ void fmoe_cuda_fused_forward_impl(
     for (long step = 0; step < n_groups; ++step) {
         FMOE_SWE(smgr->stream(num_expert), output_ready[step]);
         FMOE_SWE(smgr->stream(num_expert), output_torch_ready[step]);
+        cudaEventRecord(rtime_start[step], smgr->stream(num_expert));
         for (int ei = 0; ei < num_expert; ++ei) {
             GEN_BASE(step);
             NCCL_SAFE_CALL(ncclGroupStart());
@@ -240,7 +263,21 @@ void fmoe_cuda_fused_forward_impl(
             }
             NCCL_SAFE_CALL(ncclGroupEnd());
         }
+        cudaEventRecord(rtime_end[step], smgr->stream(num_expert));
+        cudaEventSynchronize(rtime_end[step]);
     }
+    
+    float milliseconds,stime,ctime,rtime= 0;
+    for (int step=0; step < n_groups; ++step){
+        cudaEventElapsedTime(&milliseconds, stime_start[step], input_ready[step]);
+        stime+=milliseconds;
+        cudaEventElapsedTime(&milliseconds, ctime_start[step], output_ready[step]);
+        ctime+=milliseconds;
+        cudaEventElapsedTime(&milliseconds, rtime_start[step], rtime_end[step]);
+        rtime+=milliseconds;
+    }
+    std::cout << "stime:" << stime <<" ctime:" << ctime << " rtime:" << rtime << std::endl;
+
     smgr->sync(num_expert + 1);
 
     delete [] local_ptr;
@@ -251,6 +288,10 @@ void fmoe_cuda_fused_forward_impl(
         cudaEventDestroy(input_ready[i]);
         cudaEventDestroy(output_ready[i]);
         cudaEventDestroy(output_torch_ready[i]);
+        cudaEventDestroy(stime_start[i]);
+        cudaEventDestroy(ctime_start[i]);
+        cudaEventDestroy(rtime_start[i]);
+        cudaEventDestroy(rtime_end[i]);
     }
     for (unsigned i = 0; i < params.size(); ++i) {
         cudaEventDestroy(evt_shadow[i]);
@@ -258,6 +299,10 @@ void fmoe_cuda_fused_forward_impl(
     delete [] input_ready;
     delete [] output_ready;
     delete [] output_torch_ready;
+    delete [] stime_start;
+    delete [] ctime_start;
+    delete [] rtime_start;
+    delete [] rtime_end;
 }
 
 
@@ -419,3 +464,4 @@ void fmoe_cuda_fused_backward_impl(
 }
 
 #endif  // SMART_SCHEDULE_H
+
