@@ -25,6 +25,7 @@ void _expert_count(
     auto smgr = getCudaStreamManager(gate_idx.device().index());
     auto batch_size = gate_idx.numel();
     auto n_expert = expert_count.numel();
+    // gate_idx 2048*2 expert_count 32 batch_size 4096 n_expert 32
     fmoe_cuda_expert_count_impl(
             gate_idx.data_ptr<long>(),
             expert_count.data_ptr<int>(),

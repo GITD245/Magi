@@ -16,8 +16,8 @@ def global_policy(local_expert_count, _gec, num_expert, world_size, device):
     * `bw_net`: bandwidth of the network (GBps)
     * `bw_mm`: computation throughput of performing GeMM (FLOPs)
     """
-    bw_net = float_from_env('FMOE_FASTER_GLBPLC_NETBW', 50 * 1e9 / 8)
-    bw_mm = float_from_env('FMOE_FASTER_GLBPLC_GPUTP', 11.5e12)
+    bw_net = float_from_env('FMOE_FASTER_GLBPLC_NETBW', 110 * 1e9 / 8) #V100 50 * 1e9 / 8 (50Gb/s) 4090 110 * 1e9 / 8 (110Gb/s)
+    bw_mm = float_from_env('FMOE_FASTER_GLBPLC_GPUTP', 70.0e12) #V100 11.5e12 4090 70.0e12
     alpha = float_from_env('FMOE_FASTER_GLBPLC_ALPHA', 2)
     d_model = float_from_env('FMOE_FASTER_GLBPLC_DMODEL', 2048)
 

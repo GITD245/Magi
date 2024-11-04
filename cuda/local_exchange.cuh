@@ -72,6 +72,7 @@ void fmoe_cuda_expert_count_impl(
         const long* gate_idx, int* expert_count,
         const size_t batch_size, const size_t n_expert,
         CudaStreamManager* smgr) {
+    // gate_idx 2048*2 expert_count 32 batch_size 4096 n_expert 32
     expert_count_kernel
         <<<CEIL(n_expert, PERTHREAD_EXPERTS), 256, 0, smgr->torchStream()>>>
         (gate_idx, expert_count, batch_size, n_expert);

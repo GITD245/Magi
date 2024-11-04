@@ -18,7 +18,7 @@ class MoEForward(Function):
             ctx,
             expert_fn,
             experts,
-            inp, # models,
+            inp, # 2048*1024
             pos_s, pos_g,
             local_expert_count, global_expert_count,
             stored_models,
@@ -62,8 +62,11 @@ class MoEForward(Function):
 
         local_output_buf, gib = fmoe_native.smart_sch_forward(
                 local_input_buf,
-                local_expert_count, global_expert_count, 
-                stored_models, fwd_batch_size, ctx.expert_size,
+                local_expert_count,
+                global_expert_count, 
+                stored_models, # res tensor
+                fwd_batch_size,
+                ctx.expert_size,
                 world_size, _expert_forward, get_param_fn, stash_fn, pop_fn)
 
         out = _local_gather(local_output_buf, pos_g, out_batch_size,
@@ -133,7 +136,7 @@ def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, exp
         policy_fn = get_shadow_policy(d_model=inp.shape[-1])
 
     if stored_models is None:
-        stored_models = policy_fn(local_expert_count, global_expert_count,
+        stored_models = policy_fn(local_expert_count, global_expert_count, # the res of policy_fn
                 n_expert, world_size, inp.device)
 
     topk = 1

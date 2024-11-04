@@ -64,7 +64,7 @@ void _reduce_grad(
 
 
 std::vector<torch::Tensor> _smart_sch_forward(
-        torch::Tensor input_buf,
+        torch::Tensor input_buf, //fwd_batch_size*1024
         torch::Tensor local_expert_count,
         torch::Tensor global_expert_count,
         torch::Tensor stored_models,
@@ -99,7 +99,7 @@ std::vector<torch::Tensor> _smart_sch_forward(
 
     std::vector<torch::Tensor> params;
     auto stored_models_ = stored_models.data_ptr<bool>();
-    for (long i = 0; i < num_expert * n_workers; ++i) {
+    for (long i = 0; i < num_expert * n_workers; ++i) {  //get shadow_expert to params
         if (stored_models_[i]) {
             torch::Tensor t = input_buf.new_empty({expert_size});
             if (i / num_expert == rank) {

@@ -30,11 +30,11 @@ def count_by_gate(gate, num_expert, world_size, require_pos=True):
         local_expert_count = torch.zeros(
             num_expert * world_size, device=gate.device, dtype=torch.int32
         )
-        fmoe_cuda.expert_count(gate, local_expert_count)
+        fmoe_cuda.expert_count(gate, local_expert_count) #gate: 2048*2 得到每个worker上的gate算出的这个batch上token专家分布情况
         local_expert_count = local_expert_count.long()
 
         if world_size > 1:
-            global_expert_count = fmoe_cuda.expert_exchange(
+            global_expert_count = fmoe_cuda.expert_exchange(  #得到每个worker上的各个专家需要处理的token数量 以32experts为例 前8个为cuda0设备传到本worker上的toekn 9-16为cuda1传到本设备上的token数
                 local_expert_count, num_expert, world_size
             )
         else:
@@ -43,9 +43,9 @@ def count_by_gate(gate, num_expert, world_size, require_pos=True):
             pos = None
         else:
             lec_cum = torch.cumsum(local_expert_count, dim=0).int()
-            pos_size = lec_cum[-1].item()
+            pos_size = lec_cum[-1].item() #pos_size==batch_size*top_k 2048*2
             pos = torch.empty((pos_size,), device=gate.device, dtype=torch.long)
-            fmoe_cuda.assign_pos(lec_cum, gate, pos)
+            fmoe_cuda.assign_pos(lec_cum, gate, pos) #pos: 大小为batch_size*top_k的一维tensor 对应着local_expert_count中每个token对应的cuda中idx
     return pos, local_expert_count, global_expert_count
 
 
@@ -64,8 +64,8 @@ def prepare_forward(gate, num_expert, world_size):
             num_expert, world_size)
     with torch.no_grad():
         fwd_expert_count = global_expert_count.view(world_size,
-                num_expert).sum(dim=0)
-        fwd_batch_size = int(fwd_expert_count.sum().item())
+                num_expert).sum(dim=0) #worker本地各个专家需要处理的token数
+        fwd_batch_size = int(fwd_expert_count.sum().item()) #worker本地所有专家需要处理的token数
     return (
         pos,
         local_expert_count.cpu(),
