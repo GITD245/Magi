@@ -18,10 +18,10 @@
 #endif
 
 #define CUDA_CHECK(call)                                                        \
-    {                                                                           \
-        cudaError_t err = call;                                               \
-        if (err != cudaSuccess) {                                            \
-            std::cerr << "CUDA Error in " << __FILE__ << " at line " << __LINE__ << ": " \
+{                                                                           \
+    cudaError_t err = call;                                               \
+    if (err != cudaSuccess) {                                            \
+        std::cerr << "CUDA Error in " << __FILE__ << " at line " << __LINE__ << ": " \
                       << cudaGetErrorString(err) << std::endl;              \
             exit(err);                                                        \
         }                                                                      \
@@ -134,6 +134,7 @@ void fmoe_cuda_fused_forward_impl(
         long pipeline_gran, CudaStreamManager* smgr) {
     smgr->syncTorch();
 
+    bool magi_profile_flag = false;
     int *local_ptr = new int[num_expert * world_size + 1];
     int *global_ptr = new int[num_expert * world_size + 1];
     int *local_global_ptr = new int[num_expert * world_size + 1]; // local fetched models tracker
@@ -167,7 +168,7 @@ void fmoe_cuda_fused_forward_impl(
 
     // S_0 ... S_n
     for (long step = 0; step < n_groups; ++step) {
-        cudaEventRecord(stime_start[step], smgr->stream(num_expert));
+        if (magi_profile_flag) cudaEventRecord(stime_start[step], smgr->stream(num_expert));
         for (long ei = 0; ei < num_expert; ++ei) {
             GEN_BASE(step);
             NCCL_SAFE_CALL(ncclGroupStart());
@@ -184,7 +185,7 @@ void fmoe_cuda_fused_forward_impl(
             NCCL_SAFE_CALL(ncclGroupEnd());
         }
         cudaEventRecord(input_ready[step], smgr->stream(num_expert));
-        cudaEventSynchronize(input_ready[step]);
+        if (magi_profile_flag) cudaEventSynchronize(input_ready[step]);
     }
 
     cudaEvent_t evt_get, *evt_shadow;
@@ -212,7 +213,7 @@ void fmoe_cuda_fused_forward_impl(
     for (long step = 0; step < n_groups; ++step) {
         FMOE_SWE(smgr->stream(0), input_ready[step]);
         FMOE_SWE(smgr->torchStream(), input_ready[step]);
-        cudaEventRecord(ctime_start[step], smgr->stream(0));
+        if (magi_profile_flag) cudaEventRecord(ctime_start[step], smgr->stream(0));
         for (int ei = 0; ei < num_expert; ++ei) {
             GEN_BASE(step);
             long offset = global_ptr[ei * world_size + from_base];
@@ -223,7 +224,7 @@ void fmoe_cuda_fused_forward_impl(
                     (long) ei, step * num_expert + ei, offset, micro_batch_size, d_model, smgr);
         }
         cudaEventRecord(output_ready[step], smgr->stream(0));
-        cudaEventSynchronize(output_ready[step]);
+        if (magi_profile_flag) cudaEventSynchronize(output_ready[step]);
         cudaEventRecord(output_torch_ready[step], smgr->torchStream());
     }
 
@@ -247,7 +248,7 @@ void fmoe_cuda_fused_forward_impl(
     for (long step = 0; step < n_groups; ++step) {
         FMOE_SWE(smgr->stream(num_expert), output_ready[step]);
         FMOE_SWE(smgr->stream(num_expert), output_torch_ready[step]);
-        cudaEventRecord(rtime_start[step], smgr->stream(num_expert));
+        if (magi_profile_flag) cudaEventRecord(rtime_start[step], smgr->stream(num_expert));
         for (int ei = 0; ei < num_expert; ++ei) {
             GEN_BASE(step);
             NCCL_SAFE_CALL(ncclGroupStart());
@@ -263,20 +264,22 @@ void fmoe_cuda_fused_forward_impl(
             }
             NCCL_SAFE_CALL(ncclGroupEnd());
         }
-        cudaEventRecord(rtime_end[step], smgr->stream(num_expert));
-        cudaEventSynchronize(rtime_end[step]);
+        if (magi_profile_flag) cudaEventRecord(rtime_end[step], smgr->stream(num_expert));
+        if (magi_profile_flag) cudaEventSynchronize(rtime_end[step]);
     }
     
-    float milliseconds,stime,ctime,rtime= 0;
-    for (int step=0; step < n_groups; ++step){
-        cudaEventElapsedTime(&milliseconds, stime_start[step], input_ready[step]);
-        stime+=milliseconds;
-        cudaEventElapsedTime(&milliseconds, ctime_start[step], output_ready[step]);
-        ctime+=milliseconds;
-        cudaEventElapsedTime(&milliseconds, rtime_start[step], rtime_end[step]);
-        rtime+=milliseconds;
+    if (magi_profile_flag) {
+        float milliseconds,stime,ctime,rtime= 0;
+        for (int step=0; step < n_groups; ++step){
+            cudaEventElapsedTime(&milliseconds, stime_start[step], input_ready[step]);
+            stime+=milliseconds;
+            cudaEventElapsedTime(&milliseconds, ctime_start[step], output_ready[step]);
+            ctime+=milliseconds;
+            cudaEventElapsedTime(&milliseconds, rtime_start[step], rtime_end[step]);
+            rtime+=milliseconds;
+        }
+        std::cout << "stime:" << stime <<" ctime:" << ctime << " rtime:" << rtime << std::endl;
     }
-    std::cout << "stime:" << stime <<" ctime:" << ctime << " rtime:" << rtime << std::endl;
 
     smgr->sync(num_expert + 1);
 

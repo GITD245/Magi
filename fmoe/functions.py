@@ -39,6 +39,13 @@ def count_by_gate(gate, num_expert, world_size, require_pos=True):
             )
         else:
             global_expert_count = local_expert_count
+        
+        from megatron import get_args  # type: ignore
+        args = get_args()
+        with open(f'log/{args.balance_strategy}_{args.rank}_global_gate.txt', 'a') as f:
+            f.write(str(global_expert_count).replace(
+                '\n', '').replace(' ', '')+'\n')
+            
         if not require_pos:
             pos = None
         else:
