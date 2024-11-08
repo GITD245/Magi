@@ -34,18 +34,16 @@ def count_by_gate(gate, num_expert, world_size, require_pos=True):
         local_expert_count = local_expert_count.long()
 
         if world_size > 1:
-            global_expert_count = fmoe_cuda.expert_exchange(  #得到每个worker上的各个专家需要处理的token数量 以32experts为例 前8个为cuda0设备传到本worker上的toekn 9-16为cuda1传到本设备上的token数
+            global_expert_count = fmoe_cuda.expert_exchange(  #得到每个worker上的各个专家需要处理的token数量 以4卡8experts为例 第1，3，5，7个为cuda0，1，2，3设备传到本worker上expert1的toekn 2，4，6，8为cuda0，1，2，3传到本worker上expert2上的token数
                 local_expert_count, num_expert, world_size
             )
         else:
             global_expert_count = local_expert_count
         
         from megatron import get_args  # type: ignore
-        args = get_args()
-        with open(f'log/{args.balance_strategy}_{args.rank}_global_gate.txt', 'a') as f:
-            f.write(str(global_expert_count).replace(
-                '\n', '').replace(' ', '')+'\n')
-            
+        get_args().magi_profile.recode_local_expert_count(local_expert_count)
+        get_args().magi_profile.recode_global_expert_count(global_expert_count)
+
         if not require_pos:
             pos = None
         else:

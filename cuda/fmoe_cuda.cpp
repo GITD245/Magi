@@ -79,6 +79,7 @@ std::vector<torch::Tensor> _smart_sch_forward(
         long global_batch_size,
         long expert_size,
         long n_workers,
+        bool magi_profile_flag,
         py::function forward_fn,
         py::function get_param_fn,
         py::function stash_fn,

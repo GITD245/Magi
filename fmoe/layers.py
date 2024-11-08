@@ -124,6 +124,7 @@ class FMoE(nn.Module):
         mask=None,
         mask_dict=None,
         gate_bias=True,
+        args=None,
     ):
         super().__init__()
         self.num_expert = num_expert
@@ -160,6 +161,7 @@ class FMoE(nn.Module):
         self.mask = mask
         self.mask_dict = mask_dict
         self.moe_group = moe_group
+        self.args = args
 
     def expert_fn(self, inp, fwd_expert_count):
         r"""
@@ -251,7 +253,8 @@ class FMoE(nn.Module):
         fwd = _fmoe_general_global_forward(
             moe_inp, gate_top_k_idx, self.expert_fn_single if fmoe_faster_schedule else self.expert_fn,
             self.num_expert, self.world_size,
-            experts=self.experts
+            experts=self.experts,
+            args=self.args
         )
 
         # recover deleted tensors

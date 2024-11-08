@@ -71,6 +71,7 @@ std::vector<torch::Tensor> _smart_sch_forward(
         long global_batch_size,
         long expert_size,
         long n_workers,
+        bool magi_profile_flag,
         py::function forward_fn,
         py::function get_param_fn,
         py::function stash_fn,
@@ -127,7 +128,7 @@ std::vector<torch::Tensor> _smart_sch_forward(
             global_expert_count.data_ptr<long>(),
             stored_models.data_ptr<bool>(),
             d_model, num_expert, rank, n_workers, expert_size,
-            pipeline_gran, smgr);
+            pipeline_gran,magi_profile_flag, smgr);
     }));
     return {output_buf, global_input_buf};
 }

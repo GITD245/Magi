@@ -24,7 +24,8 @@ class MoEForward(Function):
             stored_models,
             fwd_batch_size, out_batch_size,
             num_expert,
-            world_size):
+            world_size,
+            args=None):
         local_input_buf = _local_scatter(inp, pos_s)
 
         ctx.gibs = [None] * (world_size * num_expert * 2)
@@ -67,7 +68,9 @@ class MoEForward(Function):
                 stored_models, # res tensor
                 fwd_batch_size,
                 ctx.expert_size,
-                world_size, _expert_forward, get_param_fn, stash_fn, pop_fn)
+                world_size,
+                args.magi_profile_flag,
+                _expert_forward, get_param_fn, stash_fn, pop_fn)
 
         out = _local_gather(local_output_buf, pos_g, out_batch_size,
                 maybe_overlap=False)
@@ -114,13 +117,13 @@ class MoEForward(Function):
                 _expert_backward, stash_fn, pop_fn, collect_fn, set_grad_fn)
         grad_in = _local_gather(grad_in_buf, pos_s, inp_batch_size)
 
-        return (None, None, grad_in, None, None, None, None, None, None, None, None, None)
+        return (None, None, grad_in, None, None, None, None, None, None, None, None, None, None)
 
 
 policy_fn = None
 
 
-def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, experts=None, stored_models=None):
+def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, experts=None, stored_models=None,args=None):
     # TODO: Using multiple tensors as input is to be supported.
     assert(isinstance(inp, torch.Tensor))
     (
@@ -147,4 +150,4 @@ def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, exp
     return MoEForward.apply(expert_fn, experts, inp,
             torch.div(pos, topk, rounding_mode='floor'), pos,
             local_expert_count, global_expert_count, stored_models,
-            fwd_batch_size, out_batch_size, n_expert, world_size)
+            fwd_batch_size, out_batch_size, n_expert, world_size,args)

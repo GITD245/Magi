@@ -131,10 +131,9 @@ void fmoe_cuda_fused_forward_impl(
 
         long d_model,
         long num_expert, long rank, long world_size, long expert_size,
-        long pipeline_gran, CudaStreamManager* smgr) {
+        long pipeline_gran,bool magi_profile_flag, CudaStreamManager* smgr) {
     smgr->syncTorch();
 
-    bool magi_profile_flag = false;
     int *local_ptr = new int[num_expert * world_size + 1];
     int *global_ptr = new int[num_expert * world_size + 1];
     int *local_global_ptr = new int[num_expert * world_size + 1]; // local fetched models tracker

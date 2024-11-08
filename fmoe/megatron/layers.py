@@ -110,9 +110,10 @@ class MegatronMLP(FMoETransformerMLP):
             moe_group=moe_group,
             expert_dp_comm="none" if args.distributed_experts else "dp",
             gate_hook=generate_megatron_gate_hook(
-                layer_idx, args.fmoe_num_experts * world_size
+                layer_idx, args.fmoe_num_experts * world_size,
             ),
             gate=gate,
+            args=args
         )
         self.hidden_size = args.hidden_size
         if args.distributed_experts:
@@ -122,6 +123,7 @@ class MegatronMLP(FMoETransformerMLP):
         self.sigma = args.init_method_std
         self.num_layers = args.num_layers
         self.reset_parameters()
+        self.magi_profile=args.magi_profile
 
     def reset_parameters(self):
         r"""
@@ -149,6 +151,7 @@ class MegatronMLP(FMoETransformerMLP):
         from megatron import mpu # type: ignore
         x = super().forward(inp)
         x = mpu.reduce_from_tensor_model_parallel_region(x)
+        self.magi_profile.next_layer()
         return (
             x,
             torch.zeros(self.hidden_size, dtype=inp.dtype, device=inp.device),
