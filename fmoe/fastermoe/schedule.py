@@ -70,7 +70,7 @@ class MoEForward(Function):
                 ctx.expert_size,
                 world_size,
                 args.magi_profile_flag,
-                _expert_forward, get_param_fn, stash_fn, pop_fn)
+                _expert_forward, get_param_fn, stash_fn, pop_fn,args.magi_profile.record_layer_time)
 
         out = _local_gather(local_output_buf, pos_g, out_batch_size,
                 maybe_overlap=False)

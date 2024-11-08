@@ -41,8 +41,8 @@ def count_by_gate(gate, num_expert, world_size, require_pos=True):
             global_expert_count = local_expert_count
         
         from megatron import get_args  # type: ignore
-        get_args().magi_profile.recode_local_expert_count(local_expert_count)
-        get_args().magi_profile.recode_global_expert_count(global_expert_count)
+        get_args().magi_profile.record_local_expert_count(local_expert_count)
+        get_args().magi_profile.record_global_expert_count(global_expert_count)
 
         if not require_pos:
             pos = None

@@ -75,7 +75,8 @@ std::vector<torch::Tensor> _smart_sch_forward(
         py::function forward_fn,
         py::function get_param_fn,
         py::function stash_fn,
-        py::function pop_fn) {
+        py::function pop_fn,
+        py::function record_layer_time) {
     if (pipeline_gran == -1) {
         char* p = getenv("FMOE_FASTER_GROUP_SIZE");
         if (p) {
@@ -116,6 +117,7 @@ std::vector<torch::Tensor> _smart_sch_forward(
             forward_fn,
             stash_fn,
             pop_fn,
+            record_layer_time,
             input_buf.device(),
             params,
 

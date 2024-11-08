@@ -117,6 +117,7 @@ void fmoe_cuda_fused_forward_impl(
         py::function forward_fn,
         py::function stash_fn,
         py::function pop_fn,
+        py::function record_layer_time,
         c10::Device device,
         std::vector<torch::Tensor> params,
 
@@ -268,7 +269,7 @@ void fmoe_cuda_fused_forward_impl(
     }
     
     if (magi_profile_flag) {
-        float milliseconds,stime,ctime,rtime= 0;
+        float milliseconds = 0.0f, stime = 0.0f, ctime = 0.0f, rtime = 0.0f;
         for (int step=0; step < n_groups; ++step){
             cudaEventElapsedTime(&milliseconds, stime_start[step], input_ready[step]);
             stime+=milliseconds;
@@ -277,7 +278,7 @@ void fmoe_cuda_fused_forward_impl(
             cudaEventElapsedTime(&milliseconds, rtime_start[step], rtime_end[step]);
             rtime+=milliseconds;
         }
-        std::cout << "stime:" << stime <<" ctime:" << ctime << " rtime:" << rtime << std::endl;
+        record_layer_time(stime, ctime,rtime);
     }
 
     smgr->sync(num_expert + 1);
