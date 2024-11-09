@@ -18,7 +18,7 @@ class MoEForward(Function):
             ctx,
             expert_fn,
             experts,
-            inp, # 2048*1024
+            inp,
             pos_s, pos_g,
             local_expert_count, global_expert_count,
             stored_models,

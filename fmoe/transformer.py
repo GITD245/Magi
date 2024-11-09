@@ -60,7 +60,7 @@ class FMoETransformerMLP(FMoE):
         This module wraps up the FMoE module with reshape, residual and layer
         normalization.
         """
-        original_shape = inp.shape # 256*8*1024
+        original_shape = inp.shape # 256*4*1024 seq_len*micro_batch_size*d_model on each worker
         inp = inp.reshape(-1, self.d_model) 
         output = super().forward(inp)
         return output.reshape(original_shape)

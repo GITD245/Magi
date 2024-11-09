@@ -233,7 +233,7 @@ class FMoE(nn.Module):
 
             moe_inp = tree.map_structure(slice_func, moe_inp)
 
-        gate_top_k_idx, gate_score = self.gate(moe_inp)
+        gate_top_k_idx, gate_score = self.gate(moe_inp) #gate_top_k_idx:(seq_len*micro_batch_size)*top_k
 
         if self.gate_hook is not None:
             self.gate_hook(gate_top_k_idx, gate_score, None)
