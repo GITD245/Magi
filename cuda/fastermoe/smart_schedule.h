@@ -54,24 +54,17 @@ void exchangeWith(
     int gidx_recv = ei * world_size + rank_recv; \
     int idx_self = ei +      rank * num_expert;
 
-
+// local :本地token  local_global：没有被使用 global：需要接受的token
 void computePtrs(long num_expert, long rank, long world_size,
         const long* local_expert_count,
         const long* global_expert_count,
         const bool* stored_models,
         int *local_ptr,
-        int *global_ptr,
-        int *local_global_ptr) {
-    local_ptr[0] = global_ptr[0] = local_global_ptr[0] = 0;
+        int *global_ptr) {
+    local_ptr[0] = global_ptr[0] = 0;
 
     for (int i = 0; i < num_expert * world_size; ++i) {
         local_ptr[i + 1] = local_ptr[i] + local_expert_count[i];
-
-        local_global_ptr[i + 1] = local_global_ptr[i];
-        // if model fetched, add local tokens
-        if (stored_models[i]){
-            local_global_ptr[i + 1] += local_expert_count[i];
-        }
 
         auto expert_idx = i % num_expert;
         auto worker_idx = i / num_expert;
@@ -137,10 +130,10 @@ void fmoe_cuda_fused_forward_impl(
 
     int *local_ptr = new int[num_expert * world_size + 1];
     int *global_ptr = new int[num_expert * world_size + 1];
-    int *local_global_ptr = new int[num_expert * world_size + 1]; // local fetched models tracker
+
     computePtrs(num_expert, rank, world_size,
             local_expert_count, global_expert_count, stored_models,
-            local_ptr, global_ptr, local_global_ptr);
+            local_ptr, global_ptr);
 
     if (pipeline_gran > world_size) {
         pipeline_gran = world_size;
@@ -285,7 +278,7 @@ void fmoe_cuda_fused_forward_impl(
 
     delete [] local_ptr;
     delete [] global_ptr;
-    delete [] local_global_ptr;
+
     checkCudaErrors(cudaGetLastError());
     for (long i = 0; i < n_groups; ++i) {
         cudaEventDestroy(input_ready[i]);
@@ -333,11 +326,10 @@ void fmoe_cuda_fused_backward_impl(
 
     int *local_ptr = new int[num_expert * world_size + 1];
     int *global_ptr = new int[num_expert * world_size + 1];
-    int *local_global_ptr = new int[num_expert * world_size + 1]; // local fetched models tracker
 
     computePtrs(num_expert, rank, world_size,
             local_expert_count, global_expert_count, stored_models,
-            local_ptr, global_ptr, local_global_ptr);
+            local_ptr, global_ptr);
     if (pipeline_gran > world_size) {
         pipeline_gran = world_size;
     }
@@ -448,7 +440,6 @@ void fmoe_cuda_fused_backward_impl(
 
     delete [] local_ptr;
     delete [] global_ptr;
-    delete [] local_global_ptr;
     checkCudaErrors(cudaGetLastError());
     for (long i = 0; i < n_groups; ++i) {
         cudaEventDestroy(input_ready[i]);
