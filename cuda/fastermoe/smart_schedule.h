@@ -217,9 +217,9 @@ void fmoe_cuda_fused_forward_impl(
 
     // C_0 ... C_n
     for (long step = 0; step < n_groups; ++step) {
+        if (magi_profile_flag) cudaEventRecord(ctime_start[step], smgr->stream(0));
         FMOE_SWE(smgr->stream(0), input_ready[step]);
         FMOE_SWE(smgr->torchStream(), input_ready[step]);
-        if (magi_profile_flag) cudaEventRecord(ctime_start[step], smgr->stream(0));
         for (int ei = 0; ei < num_expert; ++ei) {
             GEN_BASE(step);
             long offset = global_ptr[ei * world_size + from_base];
@@ -253,9 +253,9 @@ void fmoe_cuda_fused_forward_impl(
 
     // R_0 ... R_n
     for (long step = 0; step < n_groups; ++step) {
+        if (magi_profile_flag) cudaEventRecord(rtime_start[step], smgr->stream(num_expert));
         FMOE_SWE(smgr->stream(num_expert), output_ready[step]);
         FMOE_SWE(smgr->stream(num_expert), output_torch_ready[step]);
-        if (magi_profile_flag) cudaEventRecord(rtime_start[step], smgr->stream(num_expert));
         for (int ei = 0; ei < num_expert; ++ei) {
             GEN_BASE(step);
             NCCL_SAFE_CALL(ncclGroupStart());
