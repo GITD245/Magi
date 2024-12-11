@@ -73,10 +73,11 @@ std::vector<torch::Tensor> _smart_sch_forward(
         long n_workers,
         bool magi_profile_flag,
         py::function forward_fn,
-        py::function get_param_fn,
+        py::function registe_magi_expert_fn,
+        py::function get_magi_expert_fn,
         py::function stash_fn,
         py::function pop_fn,
-        py::function record_layer_time) {
+        py::function record_layer_time_fn) {
     if (pipeline_gran == -1) {
         char* p = getenv("FMOE_FASTER_GROUP_SIZE");
         if (p) {
@@ -105,7 +106,10 @@ std::vector<torch::Tensor> _smart_sch_forward(
         if (stored_models_[i]) {
             torch::Tensor t = input_buf.new_empty({expert_size});
             if (i / num_expert == rank) {
-                get_param_fn(t, i % num_expert);
+                registe_magi_expert_fn(t,i,1);
+            }
+            else{
+                registe_magi_expert_fn(t,i,0);
             }
             params.push_back(t);
         }
@@ -117,7 +121,7 @@ std::vector<torch::Tensor> _smart_sch_forward(
             forward_fn,
             stash_fn,
             pop_fn,
-            record_layer_time,
+            record_layer_time_fn,
             input_buf.device(),
             params,
 

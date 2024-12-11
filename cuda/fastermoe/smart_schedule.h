@@ -110,7 +110,7 @@ void fmoe_cuda_fused_forward_impl(
         py::function forward_fn,
         py::function stash_fn,
         py::function pop_fn,
-        py::function record_layer_time,
+        py::function record_layer_time_fn,
         c10::Device device,
         std::vector<torch::Tensor> params,
 
@@ -298,7 +298,7 @@ void fmoe_cuda_fused_forward_impl(
             shadow_ctime+=milliseconds;
         }
         
-        record_layer_time(stime,ctime,rtime,shadow_stime,shadow_ctime);
+        record_layer_time_fn(stime,ctime,rtime,shadow_stime,shadow_ctime);
     }
 
     smgr->sync(num_expert + 1);

@@ -9,7 +9,7 @@ from fmoe.functions import _local_scatter, _local_gather
 import fmoe_cuda as fmoe_native
 from fmoe.fastermoe import expert_utils
 
-from .shadow_policy import get_shadow_policy
+from magi.magi_policy import get_magi_policy
 
 
 class MoEForward(Function):
@@ -27,6 +27,8 @@ class MoEForward(Function):
             world_size,
             args=None):
         local_input_buf = _local_scatter(inp, pos_s)
+
+        magi_expert=args.magi_expert
 
         ctx.gibs = [None] * (world_size * num_expert * 2)
         ctx.gobs = [None] * (world_size * num_expert * 2)
@@ -54,7 +56,13 @@ class MoEForward(Function):
                 assert ctx.expert_size == expert_utils.get_expert_param_size(experts, i), "report bug"            
         else:
             ctx.expert_size = 0
-        get_param_fn = lambda out, idx: expert_utils.get_expert_params(experts, out, idx)
+        # get_param_fn is replace by registe_magi_expert_fn get_magi_expert_fn
+        # get_param_fn = lambda out, idx: expert_utils.get_expert_params(experts, out, idx)
+
+        registe_magi_expert_fn=lambda out,global_expert_idx,get_params: magi_expert.registe_magi_expert(out,global_expert_idx,experts,get_params=get_params)
+
+        get_magi_expert_fn=lambda global_expert_idx: magi_expert.get_magi_expert(experts,global_expert_idx)
+
         pop_fn = lambda idx: expert_utils.pop_expert_params(experts, idx)
         ctx.shadows = [None] * world_size * num_expert
         def stash_fn(params, store_idx, expert_idx):
@@ -62,7 +70,7 @@ class MoEForward(Function):
             ctx.shadows[store_idx] = params
 
         local_output_buf, gib = fmoe_native.smart_sch_forward(
-                local_input_buf,
+                local_input_buf, #8219*1024
                 local_expert_count,
                 global_expert_count, 
                 stored_models, # res tensor
@@ -70,7 +78,12 @@ class MoEForward(Function):
                 ctx.expert_size,
                 world_size,
                 args.magi_profile_flag,
-                _expert_forward, get_param_fn, stash_fn, pop_fn,args.magi_profile.record_layer_time)
+                _expert_forward,
+                registe_magi_expert_fn,
+                get_magi_expert_fn,
+                stash_fn,
+                pop_fn,
+                args.magi_profile.record_layer_time)
 
         out = _local_gather(local_output_buf, pos_g, out_batch_size,
                 maybe_overlap=False)
@@ -136,11 +149,14 @@ def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, exp
 
     global policy_fn
     if policy_fn is None:
-        policy_fn = get_shadow_policy(d_model=inp.shape[-1])
+        policy_fn = get_magi_policy()
 
-    if stored_models is None:
-        stored_models = policy_fn(local_expert_count, global_expert_count, # the res of policy_fn
-                n_expert, world_size, inp.device)
+    # stored_models is replace by send_models keep_models del_models send_map
+    # if stored_models is None:
+    #     stored_models = policy_fn(local_expert_count, global_expert_count, # the res of policy_fn
+    #             n_expert, world_size, inp.device)
+
+    send_models,keep_models,del_models,send_map=policy_fn(args.magi_profile)
 
     topk = 1
     if len(gate.shape) == 2:
@@ -149,5 +165,5 @@ def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, exp
 
     return MoEForward.apply(expert_fn, experts, inp,
             torch.div(pos, topk, rounding_mode='floor'), pos,
-            local_expert_count, global_expert_count, stored_models,
+            local_expert_count, global_expert_count, send_models,
             fwd_batch_size, out_batch_size, n_expert, world_size,args)
