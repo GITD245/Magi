@@ -25,10 +25,10 @@ class MoEForward(Function):
             fwd_batch_size, out_batch_size,
             num_expert,
             world_size,
-            args=None):
+            magi_runtime):
         local_input_buf = _local_scatter(inp, pos_s)
 
-        magi_expert=args.magi_expert
+        magi_expert=magi_runtime.magi_expert
 
         ctx.gibs = [None] * (world_size * num_expert * 2)
         ctx.gobs = [None] * (world_size * num_expert * 2)
@@ -59,7 +59,7 @@ class MoEForward(Function):
         # get_param_fn is replace by registe_magi_expert_fn get_magi_expert_fn
         # get_param_fn = lambda out, idx: expert_utils.get_expert_params(experts, out, idx)
 
-        registe_magi_expert_fn=lambda out,global_expert_idx,get_params: magi_expert.registe_magi_expert(out,global_expert_idx,experts,get_params=get_params)
+        registe_magi_expert_fn=lambda out,global_expert_idx,get_params_flag: magi_expert.registe_magi_expert(out,global_expert_idx,experts,get_params_flag=get_params_flag)
 
         get_magi_expert_fn=lambda global_expert_idx: magi_expert.get_magi_expert(experts,global_expert_idx)
 
@@ -77,13 +77,13 @@ class MoEForward(Function):
                 fwd_batch_size,
                 ctx.expert_size,
                 world_size,
-                args.magi_profile_flag,
+                magi_runtime.magi_profile_flag,
                 _expert_forward,
                 registe_magi_expert_fn,
                 get_magi_expert_fn,
                 stash_fn,
                 pop_fn,
-                args.magi_profile.record_layer_time)
+                magi_runtime.record_layer_time)
 
         out = _local_gather(local_output_buf, pos_g, out_batch_size,
                 maybe_overlap=False)
@@ -136,7 +136,7 @@ class MoEForward(Function):
 policy_fn = None
 
 
-def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, experts=None, stored_models=None,args=None):
+def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, experts=None, stored_models=None,magi_runtime=None):
     # TODO: Using multiple tensors as input is to be supported.
     assert(isinstance(inp, torch.Tensor))
     (
@@ -156,7 +156,7 @@ def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, exp
     #     stored_models = policy_fn(local_expert_count, global_expert_count, # the res of policy_fn
     #             n_expert, world_size, inp.device)
 
-    send_models,keep_models,del_models,send_map=policy_fn(args.magi_profile)
+    send_models,keep_models,del_models,send_map=policy_fn(magi_runtime)
 
     topk = 1
     if len(gate.shape) == 2:
@@ -166,4 +166,4 @@ def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, exp
     return MoEForward.apply(expert_fn, experts, inp,
             torch.div(pos, topk, rounding_mode='floor'), pos,
             local_expert_count, global_expert_count, send_models,
-            fwd_batch_size, out_batch_size, n_expert, world_size,args)
+            fwd_batch_size, out_batch_size, n_expert, world_size,magi_runtime)
