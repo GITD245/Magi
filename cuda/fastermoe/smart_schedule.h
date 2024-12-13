@@ -54,7 +54,7 @@ void exchangeWith(
     int gidx_recv = ei * world_size + rank_recv; \
     int idx_self = ei +      rank * num_expert;
 
-// local :本地token  local_global：没有被使用 global：需要接受的token
+// local :本地token  global：需要接受的token
 void computePtrs(long num_expert, long rank, long world_size,
         const long* local_expert_count,
         const long* global_expert_count,
@@ -145,7 +145,9 @@ void fmoe_cuda_fused_forward_impl(
     cudaEvent_t *output_ready = new cudaEvent_t[n_groups];
     cudaEvent_t *output_torch_ready = new cudaEvent_t[n_groups];
     cudaEvent_t *stime_start = new cudaEvent_t[n_groups];
+    cudaEvent_t *ctime_launch = new cudaEvent_t[n_groups];
     cudaEvent_t *ctime_start = new cudaEvent_t[n_groups];
+    cudaEvent_t *rtime_launch = new cudaEvent_t[n_groups];
     cudaEvent_t *rtime_start = new cudaEvent_t[n_groups];
     cudaEvent_t *rtime_end = new cudaEvent_t[n_groups];
 
@@ -154,19 +156,23 @@ void fmoe_cuda_fused_forward_impl(
         cudaEventCreate(output_ready + i);
         cudaEventCreate(output_torch_ready + i);
         cudaEventCreate(stime_start + i);
+        cudaEventCreate(ctime_launch + i);
         cudaEventCreate(ctime_start + i);
+        cudaEventCreate(rtime_launch + i);
         cudaEventCreate(rtime_start + i);
         cudaEventCreate(rtime_end + i);
     }
 
     cudaEvent_t *shadow_stime_start = new cudaEvent_t[world_size*num_expert];
     cudaEvent_t *shadow_stime_end = new cudaEvent_t[world_size*num_expert];
+    cudaEvent_t *shadow_ctime_launch = new cudaEvent_t[world_size*num_expert];
     cudaEvent_t *shadow_ctime_start = new cudaEvent_t[world_size*num_expert];
     cudaEvent_t *shadow_ctime_end = new cudaEvent_t[world_size*num_expert];
 
     for (long i = 0; i < world_size*num_expert; ++i) {
         cudaEventCreate(shadow_stime_start + i);
         cudaEventCreate(shadow_stime_end + i);
+        cudaEventCreate(shadow_ctime_launch + i);
         cudaEventCreate(shadow_ctime_start + i);
         cudaEventCreate(shadow_ctime_end + i);
     }
@@ -197,8 +203,8 @@ void fmoe_cuda_fused_forward_impl(
         evt_shadow = new cudaEvent_t[params.size()];
     }
     for (long i = 0, si = 0; i < world_size * num_expert; ++i) {
-        if (magi_profile_flag) cudaEventRecord(shadow_stime_start[i], smgr->stream(num_expert));
         if (stored_models[i]) {
+            if (magi_profile_flag) cudaEventRecord(shadow_stime_start[i], smgr->stream(num_expert));
             if (i / num_expert == rank) {
                 cudaEventCreate(&evt_get);
                 cudaEventRecord(evt_get, smgr->stream(0));
@@ -211,15 +217,16 @@ void fmoe_cuda_fused_forward_impl(
             cudaEventCreate(evt_shadow + si);
             cudaEventRecord(evt_shadow[si], smgr->stream(num_expert));
             ++si;
+            if (magi_profile_flag) cudaEventRecord(shadow_stime_end[i], smgr->stream(num_expert));
         }
-        if (magi_profile_flag) cudaEventRecord(shadow_stime_end[i], smgr->stream(num_expert));
     }
 
     // C_0 ... C_n
     for (long step = 0; step < n_groups; ++step) {
-        if (magi_profile_flag) cudaEventRecord(ctime_start[step], smgr->stream(0));
+        if (magi_profile_flag) cudaEventRecord(ctime_launch[step], smgr->stream(0));
         FMOE_SWE(smgr->stream(0), input_ready[step]);
         FMOE_SWE(smgr->torchStream(), input_ready[step]);
+        if (magi_profile_flag) cudaEventRecord(ctime_start[step], smgr->stream(0));
         for (int ei = 0; ei < num_expert; ++ei) {
             GEN_BASE(step);
             long offset = global_ptr[ei * world_size + from_base];
@@ -235,10 +242,12 @@ void fmoe_cuda_fused_forward_impl(
 
     // Compute over shadowed experts
     for (long i = 0, si = 0; i < world_size * num_expert; ++i) {
-        if (magi_profile_flag) cudaEventRecord(shadow_ctime_start[i], smgr->stream(0));
+        
         if (stored_models[i]) {
+            if (magi_profile_flag) cudaEventRecord(shadow_ctime_launch[i], smgr->stream(0));
             FMOE_SWE(smgr->stream(0), evt_shadow[si]);
             FMOE_SWE(smgr->torchStream(), evt_shadow[si]);
+            if (magi_profile_flag) cudaEventRecord(shadow_ctime_start[i], smgr->stream(0));
             stash_fn(params[si], si, 0); // always put shadowed expert at first, so expert_idx = 0 save shadow_expert in expert0 ,original expert is put in expert_param_stash
             long offset = local_ptr[i];
             long micro_batch_size = local_expert_count[i];
@@ -246,16 +255,18 @@ void fmoe_cuda_fused_forward_impl(
                     input_buf, output_buf,
                     0, n_groups * num_expert + si, offset, micro_batch_size, d_model, smgr);
             ++si;
+            if (magi_profile_flag) cudaEventRecord(shadow_ctime_end[i], smgr->stream(0));
         }
-        if (magi_profile_flag) cudaEventRecord(shadow_ctime_end[i], smgr->stream(0));
+        
     }
     pop_fn(0);
 
     // R_0 ... R_n
     for (long step = 0; step < n_groups; ++step) {
-        if (magi_profile_flag) cudaEventRecord(rtime_start[step], smgr->stream(num_expert));
+        if (magi_profile_flag) cudaEventRecord(rtime_launch[step], smgr->stream(num_expert));
         FMOE_SWE(smgr->stream(num_expert), output_ready[step]);
         FMOE_SWE(smgr->stream(num_expert), output_torch_ready[step]);
+        if (magi_profile_flag) cudaEventRecord(rtime_start[step], smgr->stream(num_expert));
         for (int ei = 0; ei < num_expert; ++ei) {
             GEN_BASE(step);
             NCCL_SAFE_CALL(ncclGroupStart());
@@ -275,30 +286,39 @@ void fmoe_cuda_fused_forward_impl(
     }
     
     if (magi_profile_flag) {
-        float milliseconds = 0.0f, stime = 0.0f, ctime = 0.0f, rtime = 0.0f,shadow_stime = 0.0f,shadow_ctime = 0.0f;
+        float milliseconds = 0.0f, stime = 0.0f, ctime_wait = 0.0f, ctime = 0.0f, rtime_wait = 0.0f, rtime = 0.0f, shadow_stime = 0.0f,shadow_ctime_wait = 0.0f, shadow_ctime = 0.0f;
 
         for (long step=0; step < n_groups; ++step){
             cudaEventSynchronize(input_ready[step]);
+            cudaEventSynchronize(ctime_start[step]);
             cudaEventSynchronize(output_ready[step]);
+            cudaEventSynchronize(rtime_start[step]);
             cudaEventSynchronize(rtime_end[step]);
             cudaEventElapsedTime(&milliseconds, stime_start[step], input_ready[step]);
             stime+=milliseconds;
+            cudaEventElapsedTime(&milliseconds, ctime_launch[step], ctime_start[step]);
+            ctime_wait+=milliseconds;
             cudaEventElapsedTime(&milliseconds, ctime_start[step], output_ready[step]);
             ctime+=milliseconds;
+            cudaEventElapsedTime(&milliseconds, rtime_launch[step], rtime_start[step]);
+            rtime_wait+=milliseconds;
             cudaEventElapsedTime(&milliseconds, rtime_start[step], rtime_end[step]);
             rtime+=milliseconds;
         }
 
-        for (long i=0; i<num_expert*world_size; ++i){
+        for (unsigned i=0; i<params.size(); ++i){
             cudaEventSynchronize(shadow_stime_end[i]);
+            cudaEventSynchronize(shadow_ctime_start[i]);
             cudaEventSynchronize(shadow_ctime_end[i]);
             cudaEventElapsedTime(&milliseconds, shadow_stime_start[i], shadow_stime_end[i]);
             shadow_stime+=milliseconds;
+            cudaEventElapsedTime(&milliseconds, shadow_ctime_launch[i], shadow_ctime_start[i]);
+            shadow_ctime_wait+=milliseconds;
             cudaEventElapsedTime(&milliseconds, shadow_ctime_start[i], shadow_ctime_end[i]);
             shadow_ctime+=milliseconds;
         }
         
-        record_layer_time_fn(stime,ctime,rtime,shadow_stime,shadow_ctime);
+        record_layer_time_fn(stime,ctime,ctime_wait,rtime,rtime_wait,shadow_stime,shadow_ctime,shadow_ctime_wait);
     }
 
     smgr->sync(num_expert + 1);
@@ -312,7 +332,9 @@ void fmoe_cuda_fused_forward_impl(
         cudaEventDestroy(output_ready[i]);
         cudaEventDestroy(output_torch_ready[i]);
         cudaEventDestroy(stime_start[i]);
+        cudaEventDestroy(ctime_launch[i]);
         cudaEventDestroy(ctime_start[i]);
+        cudaEventDestroy(rtime_launch[i]);
         cudaEventDestroy(rtime_start[i]);
         cudaEventDestroy(rtime_end[i]);
     }
@@ -320,6 +342,7 @@ void fmoe_cuda_fused_forward_impl(
     for (long i=0; i<world_size*num_expert; ++i){
         cudaEventDestroy(shadow_stime_start[i]);
         cudaEventDestroy(shadow_stime_end[i]);
+        cudaEventDestroy(shadow_ctime_launch[i]);
         cudaEventDestroy(shadow_ctime_start[i]);
         cudaEventDestroy(shadow_ctime_end[i]);
     }
@@ -332,11 +355,14 @@ void fmoe_cuda_fused_forward_impl(
     delete [] output_ready;
     delete [] output_torch_ready;
     delete [] stime_start;
+    delete [] ctime_launch;
     delete [] ctime_start;
+    delete [] rtime_launch;
     delete [] rtime_start;
     delete [] rtime_end;
     delete [] shadow_stime_start;
     delete [] shadow_stime_end;
+    delete [] shadow_ctime_launch;
     delete [] shadow_ctime_start;
     delete [] shadow_ctime_end;
 }

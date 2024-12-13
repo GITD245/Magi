@@ -23,9 +23,8 @@ class magi_expert:
             seg.copy_(p.data.flatten())
 
     def get_magi_expert(self,out,global_expert_idx):
-        _print(self.magi_expert_dic)
-        layer=self.magi_runtime.get_layer()
-        return self.magi_expert_dic[(layer,global_expert_idx)]
+        expert=self.magi_expert_dic[(self.magi_runtime.get_layer(),global_expert_idx)]
+        self._get_params(expert,out)
     
     def registe_magi_expert(self,new_expert_buffer,global_expert_idx,experts,get_params_flag=False):
 

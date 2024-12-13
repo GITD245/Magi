@@ -67,7 +67,8 @@ std::vector<torch::Tensor> _smart_sch_forward(
         torch::Tensor input_buf, //fwd_batch_size*1024
         torch::Tensor local_expert_count,
         torch::Tensor global_expert_count,
-        torch::Tensor stored_models,
+        torch::Tensor send_models,
+        torch::Tensor keep_models,
         long global_batch_size,
         long expert_size,
         long n_workers,
@@ -100,10 +101,12 @@ std::vector<torch::Tensor> _smart_sch_forward(
     auto global_output_buf = input_buf.new_zeros({global_batch_size, d_model});
     auto output_buf = input_buf.new_zeros({input_buf.size(0), d_model});
 
-    std::vector<torch::Tensor> params;
-    auto stored_models_ = stored_models.data_ptr<bool>();
+    std::vector<torch::Tensor> send_params;
+    std::vector<torch::Tensor> keep_params;
+    auto send_models_ = send_models.data_ptr<bool>();
+    auto keep_models_ = keep_models.data_ptr<bool>();
     for (long i = 0; i < num_expert * n_workers; ++i) {  //get shadow_expert to params
-        if (stored_models_[i]) {
+        if (send_models_[i]) {
             torch::Tensor t = input_buf.new_empty({expert_size});
             if (i / num_expert == rank) {
                 registe_magi_expert_fn(t,i,1);
@@ -111,7 +114,17 @@ std::vector<torch::Tensor> _smart_sch_forward(
             else{
                 registe_magi_expert_fn(t,i,0);
             }
-            params.push_back(t);
+            send_params.push_back(t);
+        }
+        if (keep_models_[i]) {
+            torch::Tensor t = input_buf.new_empty({expert_size});
+            if (i / num_expert == rank) {
+                get_magi_expert_fn(t,i);
+            }
+            else{
+                get_magi_expert_fn(t,i);
+            }
+            keep_params.push_back(t);
         }
     }
 
@@ -123,7 +136,7 @@ std::vector<torch::Tensor> _smart_sch_forward(
             pop_fn,
             record_layer_time_fn,
             input_buf.device(),
-            params,
+            send_params,
 
             input_buf.data_ptr<scalar_t>(),
             global_input_buf.data_ptr<scalar_t>(),
@@ -132,7 +145,7 @@ std::vector<torch::Tensor> _smart_sch_forward(
 
             local_expert_count.data_ptr<long>(),
             global_expert_count.data_ptr<long>(),
-            stored_models.data_ptr<bool>(),
+            send_models.data_ptr<bool>(),
             d_model, num_expert, rank, n_workers, expert_size,
             pipeline_gran,magi_profile_flag, smgr);
     }));
