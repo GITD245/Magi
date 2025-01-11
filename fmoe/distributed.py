@@ -39,6 +39,7 @@ class DistributedGroupedDataParallel(nn.Module):
             if k.endswith('_group'):
                 self.comms[k[:-6]] = kwargs[k]
         for k in ['dp', 'gate', 'moe', 'world']:
+            # only world using get_torch_default_comm()
             if k not in self.comms:
                 self.comms[k] = get_torch_default_comm()
 
@@ -48,7 +49,7 @@ class DistributedGroupedDataParallel(nn.Module):
             for p in self.module.parameters():
                 if not p.requires_grad or p.grad is None:
                     continue
-                if hasattr(p, "dp_comm"):
+                if hasattr(p, "dp_comm"): # dp_comm:gate/none/dp
                     dp_comm = p.dp_comm
                 else:
                     dp_comm = "dp"
@@ -67,6 +68,7 @@ class DistributedGroupedDataParallel(nn.Module):
                     coalesced = coalesced.float()
                 if not no_scale and not reduce_after:
                     coalesced /= comm.size()
+                # print(f'coalesced: {coalesced.size()}')
                 torch.distributed.all_reduce(coalesced, group=comm)
                 if not no_scale and reduce_after:
                     coalesced /= comm.size()

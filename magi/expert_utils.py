@@ -1,36 +1,70 @@
 import torch
-from magi.log import _print
 
+def get_expert_param_size(e):
+    return sum(map(lambda x: x.numel(), e.parameters()))
 
-class magi_expert:
-    def __init__(self,magi_runtime):
-        self.magi_expert_dic={}
-        self.magi_runtime=magi_runtime
-        self.rank=magi_runtime.get_rank()
-        self.num_experts=magi_runtime.get_num_experts()
+def get_params(expert,out):
+    offset = 0
+    for n, p in expert.named_parameters():
+        seg = out[offset:offset + p.numel()]
+        offset += p.numel()
+        seg.copy_(p.data.flatten())
 
-    # def _create_magi_expert_buffer(self,input_buffer,expert_size,global_expert_idx):
-    #     layer=self.magi_profile.get_layer()
-    #     new_expert_buffer=input_buffer.new_empty(expert_size);
-    #     self.magi_expert_dic[(layer,global_expert_idx)]=new_expert_buffer
-    #     return new_expert_buffer
-    
-    def _get_params(self,expert,out):
-        offset = 0
-        for n, p in expert.named_parameters():
-            seg = out[offset:offset + p.numel()]
+# def stash_expert_params(e, params, idx):
+#     e = e[idx]
+#     if not hasattr(e, 'expert_param_stash'):
+#         setattr(e, 'expert_param_stash', dict())
+#         setattr(e, 'expert_grad_stash', dict())
+#     offset = 0
+#     for n, p in e.named_parameters():
+#         if n not in e.expert_param_stash:
+#             e.expert_param_stash[n] = p.data.clone()
+#             e.expert_grad_stash[n] = p.grad.clone() if p.grad is not None else None
+#         with torch.no_grad():
+#             seg = params[offset:offset + p.numel()]
+#             offset += p.numel()
+#             p.copy_(seg.reshape(p.shape))
+#             p.grad = None
+
+# def pop_expert_params(expert):
+#         if not hasattr(expert, 'expert_param_stash'):
+#             return
+#         if not expert.expert_param_stash:
+#             return
+#         for n, p in expert.named_parameters():
+#             with torch.no_grad():
+#                 p.copy_(expert.expert_param_stash[n])
+#                 if expert.expert_grad_stash[n] is not None:
+#                     p.grad = expert.expert_grad_stash[n].clone()
+#         expert.expert_param_stash.clear()
+#         expert.expert_grad_stash.clear()
+
+def push_params(params,expert):
+    offset = 0
+    for n, p in expert.named_parameters():
+        with torch.no_grad():
+            seg = params[offset:offset + p.numel()]
             offset += p.numel()
-            seg.copy_(p.data.flatten())
+            p.copy_(seg.reshape(p.shape))
+            p.grad = None
 
-    def get_magi_expert(self,out,global_expert_idx):
-        expert=self.magi_expert_dic[(self.magi_runtime.get_layer(),global_expert_idx)]
-        self._get_params(expert,out)
-    
-    def registe_magi_expert(self,new_expert_buffer,global_expert_idx,experts,get_params_flag=False):
+def collect_expert_grads(e, grads):
+    offset = 0
+    for _, p in e.named_parameters():
+        seg = grads[offset:offset + p.numel()]
+        offset += p.numel()
+        if p.grad is not None:
+            seg.copy_(p.grad.flatten())
+            p.grad = None
+        else:
+            seg.zero_()
 
-        if get_params_flag:
-            expert = experts[global_expert_idx%self.num_experts]
-            self._get_params(expert,new_expert_buffer)
-        
-        self.magi_expert_dic[(self.magi_runtime.get_layer(),global_expert_idx)]=new_expert_buffer
-        # self._print_rank_0(self.magi_expert_dic)
+def set_grads(e, grads):
+    offset = 0
+    for n, p in e.named_parameters():
+        seg = grads[offset:offset + p.numel()]
+        offset += p.numel()
+        if p.grad is None:
+            p.grad = seg.clone().reshape(p.shape)
+        else:
+            p.grad += seg.reshape(p.shape)

@@ -14,3 +14,5 @@ dist
 **/.DS_Store
 .idea
 *.so
+.cache
+compile_commands.json

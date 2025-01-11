@@ -1,13 +1,17 @@
 import torch
 from collections import deque
 import torch.distributed as dist
+from magi import experts as magi_experts
 from magi import expert_utils
 from magi import log
-from magi import magi_policy
+from magi import policy
 
 class magi_runtime():
     def __init__(self,args,window_size=10):
 
+        self.model_keep_time=4
+        self.policy_interval=5
+        
         self.d_model = args.hidden_size
         self.num_layers = args.num_layers
         self.num_experts = args.fmoe_num_experts
@@ -18,36 +22,106 @@ class magi_runtime():
         self.magi_profile_flag=args.magi_profile_flag
         self.gate=args.balance_strategy
 
-        self.per_layer_local_token_count=[None] * self.num_layers
-        self.per_layer_global_token_count=[None] * self.num_layers
-        self.per_layer_record_time={'stime':[0]* self.num_layers,
+        # pl means per layer
+        self.pl_local_token_count=[None] * self.num_layers
+        self.pl_global_token_count=[None] * self.num_layers
+        self.pl_record_time={'stime':[0]* self.num_layers,
                                       'ctime':[0]* self.num_layers,
                                       'ctime_wait':[0]* self.num_layers,
                                       'rtime':[0]* self.num_layers,
                                       'rtime_wait':[0]* self.num_layers,
-                                      'shadow_stime':[0]* self.num_layers,
-                                      'shadow_ctime':[0]* self.num_layers,
-                                      'shadow_ctime_wait':[0]* self.num_layers}
+                                      'magi_stime':[0]* self.num_layers,
+                                      'magi_ctime':[0]* self.num_layers,
+                                      'magi_ctime_wait':[0]* self.num_layers,
+                                      'keep_ctime':[0]* self.num_layers}
         
-        self.per_layer_models=[{'send_models':torch.zeros(self.world_size*self.num_experts, dtype=torch.bool),
-                                      'keep_models':torch.zeros(self.world_size*self.num_experts, dtype=torch.bool),
-                                      'del_models':torch.zeros(self.world_size*self.num_experts, dtype=torch.bool),
-                                      'sand_maps':None}]* self.num_layers
+        self.pl_send=torch.zeros(self.num_layers,self.world_size*self.num_experts, dtype=torch.bool)
+        # [i*self.world_size+rank] means the expert_idx i shoud be recived from which rank
+        self.pl_receive=torch.zeros(self.num_layers,self.world_size*self.num_experts*self.world_size, dtype=torch.bool)
+        # MAGI_TODO 优化is_magi_expert_exist_fn
+        self.global_pl_keep=[torch.zeros(self.num_layers, self.world_size*self.num_experts, dtype=torch.int,device=torch.cuda.current_device()).contiguous() for _ in range(self.world_size)]
 
         self.local_token_deque=deque(maxlen=self.window_size)
         self.global_token_deque=deque(maxlen=self.window_size)
 
-
         self.eval=False
         self.itr=1
         self.layer=0
+        policy.init_policy(self.world_size,self.num_experts)
+        log.init_log(args.rank,args.magi_profile_flag)
+        self.magi_expert=magi_experts.magi_expert(self)
 
-        log.set_rank(args.rank)
-        self.magi_expert=expert_utils.magi_expert(self)
+    def set_eval(self,eval_flag):
+        self._init_send_receive_models()
+        self.eval=eval_flag
+
+    def record_local_expert_count(self,local_expert_count):
+        if not self.eval:
+            self.pl_local_token_count[self.layer]=local_expert_count
+
+    def record_global_expert_count(self,global_expert_count):
+        if not self.eval:
+            self.pl_global_token_count[self.layer]=global_expert_count
+            log.save_global_token_log(self.gate,self.layer,self.itr,global_expert_count)
+
+    def record_layer_time(self,stime,ctime,ctime_wait,rtime,rtime_wait,magi_stime,magi_ctime,magi_ctime_wait,keep_ctime):
+        if not self.eval:
+            self.pl_record_time['stime'][self.layer]=stime
+            self.pl_record_time['ctime'][self.layer]=ctime
+            self.pl_record_time['ctime_wait'][self.layer]=ctime_wait
+            self.pl_record_time['rtime'][self.layer]=rtime
+            self.pl_record_time['rtime_wait'][self.layer]=rtime_wait
+            self.pl_record_time['magi_stime'][self.layer]=magi_stime
+            self.pl_record_time['magi_ctime'][self.layer]=magi_ctime
+            self.pl_record_time['magi_ctime_wait'][self.layer]=magi_ctime_wait
+            self.pl_record_time['keep_ctime'][self.layer]=keep_ctime
+
+    def get_send_models(self,layer=-1):
+        if layer==-1:
+            layer=self.layer
+        return self.pl_send[layer]
+
+    def get_receive_models(self,layer=-1):
+        if layer==-1:
+            layer=self.layer
+        return self.pl_receive[layer]
+    
+    # MAGI_TODO
+    def get_keep_models(self,layer=-1):
+        if layer==-1:
+            layer=self.layer
+        return self.global_pl_keep[self.rank][layer]
+    
+    def is_magi_expert_exist(self,flag_buf,rank_idx,expert_idx,layer=-1):
+        if layer==-1:
+            layer=self.layer
+        if self.global_pl_keep[rank_idx][layer][expert_idx]>0:
+            flag_buf[0]=True
+        else:
+            flag_buf[0]=False
+    
+    def is_global_magi_expert_exist(self,flag_buf,expert_idx,layer=-1):
+        if layer==-1:
+            layer=self.layer
+        cnt=0
+        for rank_idx in range(self.world_size):
+            cnt+=self.global_pl_keep[rank_idx][layer][expert_idx]
+        if cnt>0:
+            flag_buf[0]=True
+        else:
+            flag_buf[0]=False
+        
+    def _init_send_receive_models(self):
+        self.pl_send=torch.zeros(self.num_layers,self.world_size*self.num_experts, dtype=torch.bool)
+        self.pl_receive=torch.zeros(self.num_layers,self.world_size*self.num_experts*self.world_size, dtype=torch.bool)
+
+    def _receive_or_not(self,layer_idx,expert_idx):
+        # should this rank receive this expert
+        return self.pl_send[layer_idx][expert_idx] and self.pl_receive[layer_idx][expert_idx*self.world_size+self.rank]
 
     def _lg_token_to_or_token(self,layer=0,itr=0):
-        origin_token={}
-        recive_token={}
+        origin_token=dict()
+        recive_token=dict()
 
         for expert_idx in range(self.rank*self.num_experts,self.rank*self.num_experts+self.num_experts):
             # token needn't to be sent to other workers
@@ -58,69 +132,59 @@ class magi_runtime():
         log.print_token(self.itr,layer,recive_token,origin_token)
       
         return origin_token,recive_token
+    
+    def _update_keep_models(self):
+        for layer_idx in range(self.num_layers):
+            for expert_idx in range(self.world_size*self.num_experts):
+                # cnt down keep models
+                if self.global_pl_keep[self.rank][layer_idx][expert_idx]>0:
+                    if self.global_pl_keep[self.rank][layer_idx][expert_idx]==1:
+                        # del model
+                        self.magi_expert.del_magi_expert(layer_idx,expert_idx)
+                    self.global_pl_keep[self.rank][layer_idx][expert_idx]-=1
+                # record send receive models in keep models
+                if self._receive_or_not(layer_idx,expert_idx):
+                    #MAGI_TODO: change keep time?
+                    # self rank should not keep self magi_expert
+                    if expert_idx//self.num_experts!=self.rank:
+                        self.global_pl_keep[self.rank][layer_idx][expert_idx]+=self.model_keep_time
 
-    def set_eval(self,eval_flag):
-        self.eval=eval_flag
 
-    def record_local_expert_count(self,local_expert_count):
-        if not self.eval:
-            self.per_layer_local_token_count[self.layer]=local_expert_count
+    def _all_gather_keep_models(self):
+        # MAGI_TODO
+        send_tensor = self.global_pl_keep[self.rank].contiguous()
+        receive_tensor_list=[torch.zeros(self.num_layers,self.world_size*self.num_experts, dtype=torch.int,device=torch.cuda.current_device()).contiguous() for _ in range(self.world_size)]
+        
+        dist.all_gather(receive_tensor_list,send_tensor)
+        self.global_pl_keep=receive_tensor_list
 
-    def record_global_expert_count(self,global_expert_count):
-        if not self.eval:
-            self.per_layer_global_token_count[self.layer]=global_expert_count
-
-            log.save_global_token_log(self.gate,self.layer,self.itr,global_expert_count)
-
-
-    def record_layer_time(self,stime,ctime,ctime_wait,rtime,rtime_wait,shadow_stime,shadow_ctime,shadow_ctime_wait):
-        if not self.eval:
-            self.per_layer_record_time['stime'][self.layer]=stime
-            self.per_layer_record_time['ctime'][self.layer]=ctime
-            self.per_layer_record_time['ctime_wait'][self.layer]=ctime_wait
-            self.per_layer_record_time['rtime'][self.layer]=rtime
-            self.per_layer_record_time['rtime_wait'][self.layer]=rtime_wait
-            self.per_layer_record_time['shadow_stime'][self.layer]=shadow_stime
-            self.per_layer_record_time['shadow_ctime'][self.layer]=shadow_ctime
-            self.per_layer_record_time['shadow_ctime_wait'][self.layer]=shadow_ctime_wait
-    
-    def get_layer(self):
-        return self.layer
-    
-    def get_d_model(self):
-        return self.d_model
-
-    def get_rank(self):
-        return self.rank
-    
-    def get_itr(self):
-        return self.itr
-    
-    def get_world_size(self):
-        return self.world_size
-    
-    def get_num_experts(self):
-        return self.num_experts
-    
-    def get_keep_models(self):
-        return self.per_layer_models[self.get_layer()]['keep_models']
-    
-    def update_keep_models(self,expert_idx,keep_model_flag):
-        self.per_layer_models[self.get_layer()]['keep_models'][expert_idx]=keep_model_flag
-    
     def next_layer(self):
+        # log._print(f'runtime_layer:{self.layer}')
         if not self.eval:
             self.layer+=1
             
     def next_itr(self):
-             
-        self.local_token_deque.appendleft([value for value in self.per_layer_local_token_count])
-        self.global_token_deque.appendleft([value for value in self.per_layer_global_token_count])
+        if self.eval:
+            print('into eval')
+        self.local_token_deque.appendleft([value for value in self.pl_local_token_count])
+        self.global_token_deque.appendleft([value for value in self.pl_global_token_count])
+        log.print_time(self.pl_record_time)
 
         self._lg_token_to_or_token()
+        # MAGI_TODO: Reduce or_token to rank0 ?
 
-        if self.magi_profile_flag:
-            log.print_time(self.per_layer_record_time)
-
+        # update keep_models
+        self._update_keep_models()
+        # allgather keep models
+        self._all_gather_keep_models()
+        
+        if self.itr%self.policy_interval==0:
+            # using policy to get next itd send receive
+            self.pl_send,self.pl_receive,self.global_pl_keep=policy.using_policy(self)
+            # log._print(f'rank:{self.rank} pl_send:{self.pl_send} pl_receive:{self.pl_receive} global_pl_keep:{self.global_pl_keep}')
+        else:
+            self._init_send_receive_models()
+            
         self.itr+=1
         self.layer=0
+        

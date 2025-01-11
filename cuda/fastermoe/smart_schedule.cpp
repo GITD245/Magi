@@ -37,10 +37,8 @@ inline ncclDataType_t getNcclDataType(at::ScalarType t) {
     }
 }
 
-
 void _reduce_grad(
         torch::Tensor t,
-        long root,
         long expert_size) {
     auto smgr = getCudaStreamManager(t.device().index());
 
@@ -54,9 +52,9 @@ void _reduce_grad(
     AT_DISPATCH_FLOATING_TYPES_AND2(at::ScalarType::Half, at::ScalarType::BFloat16,
             t.scalar_type(), "fmoe_cuda_reduce_grad", ([&] {
             void* buf = (void*)t.data_ptr<scalar_t>();
-            NCCL_SAFE_CALL(ncclReduce(buf, buf, expert_size,
+            NCCL_SAFE_CALL(ncclAllReduce(buf, buf, expert_size,
                         dtype,
-                        ncclSum, root,
+                        ncclSum,
                         smgr->ncclcomm, smgr->stream(0)));
         })
     );
@@ -68,16 +66,15 @@ std::vector<torch::Tensor> _smart_sch_forward(
         torch::Tensor local_expert_count,
         torch::Tensor global_expert_count,
         torch::Tensor send_models,
-        torch::Tensor keep_models,
+        torch::Tensor receive_models,
         long global_batch_size,
         long expert_size,
         long n_workers,
         bool magi_profile_flag,
         py::function forward_fn,
         py::function registe_magi_expert_fn,
-        py::function get_magi_expert_fn,
-        py::function stash_fn,
-        py::function pop_fn,
+        py::function push_magi_expert_fn,
+        py::function is_magi_expert_exist_fn,
         py::function record_layer_time_fn) {
     if (pipeline_gran == -1) {
         char* p = getenv("FMOE_FASTER_GROUP_SIZE");
@@ -102,29 +99,24 @@ std::vector<torch::Tensor> _smart_sch_forward(
     auto output_buf = input_buf.new_zeros({input_buf.size(0), d_model});
 
     std::vector<torch::Tensor> send_params;
-    std::vector<torch::Tensor> keep_params;
+    std::vector<torch::Tensor> receive_params;
     auto send_models_ = send_models.data_ptr<bool>();
-    auto keep_models_ = keep_models.data_ptr<bool>();
+    auto receive_models_ = receive_models.data_ptr<bool>();
     for (long i = 0; i < num_expert * n_workers; ++i) {  //get shadow_expert to params
         if (send_models_[i]) {
             torch::Tensor t = input_buf.new_empty({expert_size});
             if (i / num_expert == rank) {
+                //send expert param buffer
                 registe_magi_expert_fn(t,i,1);
+                send_params.push_back(t);
             }
             else{
-                registe_magi_expert_fn(t,i,0);
+                if (receive_models_[i*n_workers+rank]) {
+                    //recive expert param buffer
+                    registe_magi_expert_fn(t,i,0);
+                    receive_params.push_back(t);
+                }
             }
-            send_params.push_back(t);
-        }
-        if (keep_models_[i]) {
-            torch::Tensor t = input_buf.new_empty({expert_size});
-            if (i / num_expert == rank) {
-                get_magi_expert_fn(t,i);
-            }
-            else{
-                get_magi_expert_fn(t,i);
-            }
-            keep_params.push_back(t);
         }
     }
 
@@ -132,11 +124,13 @@ std::vector<torch::Tensor> _smart_sch_forward(
             input_buf.scalar_type(), "fmoe_cuda_smart_sch_forward", ([&] {
         fmoe_cuda_fused_forward_impl(
             forward_fn,
-            stash_fn,
-            pop_fn,
             record_layer_time_fn,
+            push_magi_expert_fn,
+            is_magi_expert_exist_fn,
             input_buf.device(),
+
             send_params,
+            receive_params,
 
             input_buf.data_ptr<scalar_t>(),
             global_input_buf.data_ptr<scalar_t>(),
@@ -145,7 +139,10 @@ std::vector<torch::Tensor> _smart_sch_forward(
 
             local_expert_count.data_ptr<long>(),
             global_expert_count.data_ptr<long>(),
+
             send_models.data_ptr<bool>(),
+            receive_models.data_ptr<bool>(),
+
             d_model, num_expert, rank, n_workers, expert_size,
             pipeline_gran,magi_profile_flag, smgr);
     }));
@@ -156,13 +153,14 @@ torch::Tensor _smart_sch_backward(
         torch::Tensor grad_out,
         torch::Tensor local_expert_count,
         torch::Tensor global_expert_count,
-        torch::Tensor stored_models,
+        torch::Tensor send_models,
+        torch::Tensor receive_models,
         long buf_batch_size,
         long global_batch_size,
         long n_workers,
         py::function backward_fn,
-        py::function stash_fn,
-        py::function pop_fn,
+        py::function is_magi_expert_exist_fn,
+        py::function is_global_magi_expert_exist_fn,
         py::function collect_fn,
         py::function set_grad_fn) {
     const auto num_expert = local_expert_count.size(0) / n_workers;
@@ -178,8 +176,8 @@ torch::Tensor _smart_sch_backward(
             "fmoe_cuda_smartsch_backward", ([&] {
         fmoe_cuda_fused_backward_impl(
             backward_fn,
-            stash_fn,
-            pop_fn,
+            is_magi_expert_exist_fn,
+            is_global_magi_expert_exist_fn,
             collect_fn,
             set_grad_fn,
             grad_out.device(),
@@ -191,7 +189,8 @@ torch::Tensor _smart_sch_backward(
 
             local_expert_count.data_ptr<long>(),
             global_expert_count.data_ptr<long>(),
-            stored_models.data_ptr<bool>(),
+            send_models.data_ptr<bool>(),
+            receive_models.data_ptr<bool>(),
             d_model, num_expert, rank, n_workers,
             pipeline_gran, smgr);
     }));

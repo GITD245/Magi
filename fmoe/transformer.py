@@ -46,13 +46,14 @@ class FMoETransformerMLP(FMoE):
         activation=torch.nn.GELU(),
         expert_dp_comm="none",
         expert_rank=0,
+        magi_runtime=None,
         **kwargs
     ):
         def one_expert(d_model):
             return _Expert(1, d_model, d_hidden, activation, rank=0)
-        
         expert = one_expert
-        super().__init__(num_expert=num_expert, d_model=d_model, expert=expert, **kwargs)
+        magi_runtime.magi_expert.set_add_expert_fn(expert)
+        super().__init__(num_expert=num_expert, d_model=d_model, expert=expert,magi_runtime=magi_runtime,**kwargs)
         self.mark_parallel_comm(expert_dp_comm)
 
     def forward(self, inp: torch.Tensor):

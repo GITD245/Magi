@@ -1,4 +1,4 @@
-#include <iostream>
+#include <iostream> // IWYU pragma: keep
 #include <vector>
 #include <torch/csrc/autograd/custom_function.h>
 #include <torch/extension.h>
@@ -76,33 +76,32 @@ std::vector<torch::Tensor> _smart_sch_forward(
         torch::Tensor local_expert_count,
         torch::Tensor global_expert_count,
         torch::Tensor send_models,
-        torch::Tensor keep_models,
+        torch::Tensor receive_models,
         long global_batch_size,
         long expert_size,
         long n_workers,
         bool magi_profile_flag,
         py::function forward_fn,
         py::function registe_magi_expert_fn,
-        py::function get_magi_expert_fn,
-        py::function stash_fn,
-        py::function pop_fn,
+        py::function push_magi_expert_fn,
+        py::function is_magi_expert_exist_fn,
         py::function record_layer_time_fn);
 torch::Tensor _smart_sch_backward(
         torch::Tensor grad_out,
         torch::Tensor local_expert_count,
         torch::Tensor global_expert_count,
-        torch::Tensor stored_models,
+        torch::Tensor send_models,
+        torch::Tensor receive_models,
         long buf_batch_size,
         long global_batch_size,
         long n_workers,
         py::function backward_fn,
-        py::function stash_fn,
-        py::function pop_fn,
+        py::function is_magi_expert_exist_fn,
+        py::function is_global_magi_expert_exist_fn,
         py::function collect_fn,
         py::function set_grad_fn);
 void _reduce_grad(
         torch::Tensor t,
-        long root,
         long expert_size);
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

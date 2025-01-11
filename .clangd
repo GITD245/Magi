@@ -1,0 +1,13 @@
+CompileFlags:
+  Add:
+    - -Wno-unused-variable
+    - --no-cuda-version-check
+    - --cuda-path=/usr/local/cuda
+  Remove:
+    - -forward-unknown-to-host-compiler
+    - -gencode*
+    - --generate-dependencies-with-compile
+    - --dependency-output
+    - --expt-relaxed-constexpr
+    - --compiler-options
+    - -ccbin

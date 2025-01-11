@@ -10,7 +10,7 @@ from .functions import prepare_forward, ensure_comm
 from .functions import MOEScatter, MOEGather
 from .functions import AllGather, Slice
 from .gates import NaiveGate
-
+from magi import expert_utils
 from .fastermoe.config import switch_from_env
 
 
@@ -162,6 +162,9 @@ class FMoE(nn.Module):
         self.mask_dict = mask_dict
         self.moe_group = moe_group
         self.magi_runtime = magi_runtime
+
+        self.magi_runtime.magi_expert.set_expert_size(expert_utils.get_expert_param_size(self.experts[0]))
+        self.magi_runtime.magi_expert.set_experts(self.experts)
 
     def expert_fn(self, inp, fwd_expert_count):
         r"""
