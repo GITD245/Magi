@@ -16,684 +16,729 @@
 namespace py = pybind11;
 
 #if defined(CUDA_VERSION) && (CUDA_VERSION < 110010)
-#define FMOE_SWE(__s__,__e__) cudaStreamWaitEvent(__s__,__e__,0)
+#define FMOE_SWE(__s__, __e__) cudaStreamWaitEvent(__s__, __e__, 0)
 #else
-#define FMOE_SWE(__s__,__e__) cudaStreamWaitEvent(__s__,__e__)
+#define FMOE_SWE(__s__, __e__) cudaStreamWaitEvent(__s__, __e__)
 #endif
 
-#define CUDA_CHECK(call)                                                        \
-{                                                                           \
-    cudaError_t err = call;                                               \
-    if (err != cudaSuccess) {                                            \
-        std::cerr << "CUDA Error in " << __FILE__ << " at line " << __LINE__ << ": " \
-                      << cudaGetErrorString(err) << std::endl;              \
-            exit(err);                                                        \
-        }                                                                      \
-    }
+#define CUDA_CHECK(call)                                                       \
+  {                                                                            \
+    cudaError_t err = call;                                                    \
+    if (err != cudaSuccess) {                                                  \
+      std::cerr << "CUDA Error in " << __FILE__ << " at line " << __LINE__     \
+                << ": " << cudaGetErrorString(err) << std::endl;               \
+      exit(err);                                                               \
+    }                                                                          \
+  }
 
-template<typename scalar_t>
-void exchangeWith(
-        const scalar_t* sendbuf, size_t sendcount, int t_send,
-        scalar_t* recvbuf, size_t recvcount, int t_recv,
-        long d_model,
-        cudaStream_t stream, ncclComm_t comm) {
-    if (sendcount) {
-        ncclSend(sendbuf, sendcount * d_model * sizeof(scalar_t),
-                ncclChar, t_send , comm, stream);
-    }
-    if (recvcount) {
-        ncclRecv(recvbuf, recvcount * d_model * sizeof(scalar_t),
-                ncclChar, t_recv, comm, stream);
-    }
+template <typename scalar_t>
+void exchangeWith(const scalar_t *sendbuf, size_t sendcount, int t_send,
+                  scalar_t *recvbuf, size_t recvcount, int t_recv, long d_model,
+                  cudaStream_t stream, ncclComm_t comm) {
+  if (sendcount) {
+    ncclSend(sendbuf, sendcount * d_model * sizeof(scalar_t), ncclChar, t_send,
+             comm, stream);
+  }
+  if (recvcount) {
+    ncclRecv(recvbuf, recvcount * d_model * sizeof(scalar_t), ncclChar, t_recv,
+             comm, stream);
+  }
 }
 
+#define GEN_BASE(_step)                                                        \
+  long to_base = (group_rank + _step) % n_groups * pipeline_gran;              \
+  long from_base = (group_rank + n_groups - _step) % n_groups * pipeline_gran;
+#define GEN_IDX                                                                \
+  int idx_send = ei + rank_send * num_expert;                                  \
+  int idx_recv = ei + rank_recv * num_expert;                                  \
+  int gidx_send = ei * world_size + rank_send;                                 \
+  int gidx_recv = ei * world_size + rank_recv;                                 \
+  int idx_self = ei + rank * num_expert;
 
-#define GEN_BASE(_step) \
-    long to_base = (group_rank + _step) % n_groups * pipeline_gran; \
-    long from_base = (group_rank + n_groups - _step) % n_groups * pipeline_gran;
-#define GEN_IDX \
-    int idx_send = ei + rank_send * num_expert; \
-    int idx_recv = ei + rank_recv * num_expert; \
-    int gidx_send = ei * world_size + rank_send; \
-    int gidx_recv = ei * world_size + rank_recv; \
-    int idx_self = ei +      rank * num_expert;
-
-bool is_magi_expert_exist(py::function is_magi_expert_exist_fn, int rank_idx, int expert_idx){
-    torch::Tensor bool_tensor = torch::zeros({1}, torch::kBool);
-    is_magi_expert_exist_fn(bool_tensor,rank_idx,expert_idx);
-    bool is_magi_exist_flag = bool_tensor.data_ptr<bool>()[0];
-    return is_magi_exist_flag;
+bool is_magi_expert_exist(py::function is_magi_expert_exist_fn, int rank_idx,
+                          int expert_idx) {
+  torch::Tensor bool_tensor = torch::zeros({1}, torch::kBool);
+  is_magi_expert_exist_fn(bool_tensor, rank_idx, expert_idx);
+  bool is_magi_exist_flag = bool_tensor.data_ptr<bool>()[0];
+  return is_magi_exist_flag;
 }
 
-// local_ptr:local token,used in S_0 C_shadow R_0   global_ptr:token need to be received,used in S_0 C_0 R_0
+// local_ptr:local token,used in S_0 C_shadow R_0   global_ptr:token need to be
+// received,used in S_0 C_0 R_0
 void computePtrs(long num_expert, long rank, long world_size,
-        const long* local_expert_count,
-        const long* global_expert_count,
-        const bool* send_models,
-        const bool* receive_models,
-        int *local_ptr,
-        int *global_ptr,
-        py::function is_magi_expert_exist_fn) {
-    local_ptr[0] = global_ptr[0] = 0;
+                 const long *local_expert_count,
+                 const long *global_expert_count, const bool *send_models,
+                 const bool *receive_models, int *local_ptr, int *global_ptr,
+                 py::function is_magi_expert_exist_fn) {
+  local_ptr[0] = global_ptr[0] = 0;
 
-    for (int i = 0; i < num_expert * world_size; ++i) {
-        local_ptr[i + 1] = local_ptr[i] + local_expert_count[i];
+  for (int i = 0; i < num_expert * world_size; ++i) {
+    local_ptr[i + 1] = local_ptr[i] + local_expert_count[i];
 
-        auto expert_idx = i % num_expert;
-        auto worker_idx = i / num_expert;
-        auto global_expert_idx = rank * num_expert + expert_idx;
-        auto gp_idx = expert_idx * world_size + worker_idx;
+    auto expert_idx = i % num_expert;
+    auto worker_idx = i / num_expert;
+    auto global_expert_idx = rank * num_expert + expert_idx;
+    auto gp_idx = expert_idx * world_size + worker_idx;
 
-        // if local model wasn't become a magi_model, receive global tokens
-        if (receive_models[global_expert_idx * world_size + worker_idx]||is_magi_expert_exist(is_magi_expert_exist_fn,worker_idx,global_expert_idx)) {
-            global_ptr[gp_idx + 1] = 0;
-        } else {
-            global_ptr[gp_idx + 1] = global_expert_count[i];
-        }
+    // if local model wasn't become a magi_model, receive global tokens
+    if (receive_models[global_expert_idx * world_size + worker_idx] ||
+        is_magi_expert_exist(is_magi_expert_exist_fn, worker_idx,
+                             global_expert_idx)) {
+      global_ptr[gp_idx + 1] = 0;
+    } else {
+      global_ptr[gp_idx + 1] = global_expert_count[i];
     }
-    global_ptr[0] = 0;
-    for (int i = 0; i < num_expert * world_size; ++i) {
-        global_ptr[i + 1] += global_ptr[i];
-    }
+  }
+  global_ptr[0] = 0;
+  for (int i = 0; i < num_expert * world_size; ++i) {
+    global_ptr[i + 1] += global_ptr[i];
+  }
 }
 
-
-template<typename scalar_t>
-void computeFn(py::function fn, c10::Device device, 
-        scalar_t* inp_buf, scalar_t* out_buf,
-        long expert_idx, long store_idx, long offset, long micro_batch_size, long d_model, bool magi_flag,
-        CudaStreamManager* smgr) {
-    if(micro_batch_size == 0) {
-        return;
-    }
-    auto options = torch::TensorOptions()
-        .dtype(c10::CppTypeToScalarType<scalar_t>::value)
-        .device(device)
-        .requires_grad(true);
-    auto inp = torch::from_blob(inp_buf + offset * d_model,
-            {micro_batch_size, d_model}, options);
-    auto oup = torch::from_blob(out_buf + offset * d_model,
-            {micro_batch_size, d_model}, options);
-    smgr->use_default = true;
-    fn(inp, oup, expert_idx, store_idx,magi_flag);
-    smgr->use_default = false;
+template <typename scalar_t>
+void computeFn(py::function fn, c10::Device device, scalar_t *inp_buf,
+               scalar_t *out_buf, long expert_idx, long store_idx, long offset,
+               long micro_batch_size, long d_model, bool magi_flag,
+               CudaStreamManager *smgr) {
+  if (micro_batch_size == 0) {
+    return;
+  }
+  auto options = torch::TensorOptions()
+                     .dtype(c10::CppTypeToScalarType<scalar_t>::value)
+                     .device(device)
+                     .requires_grad(true);
+  auto inp = torch::from_blob(inp_buf + offset * d_model,
+                              {micro_batch_size, d_model}, options);
+  auto oup = torch::from_blob(out_buf + offset * d_model,
+                              {micro_batch_size, d_model}, options);
+  smgr->use_default = true;
+  fn(inp, oup, expert_idx, store_idx, magi_flag);
+  smgr->use_default = false;
 }
 
-
-template<typename scalar_t>
+template <typename scalar_t>
 void fmoe_cuda_fused_forward_impl(
-        py::function forward_fn,
-        py::function record_layer_time_fn,
-        py::function push_magi_expert_fn,
-        py::function is_magi_expert_exist_fn,
-        c10::Device device,
+    py::function forward_fn, py::function record_layer_time_fn,
+    py::function push_magi_expert_fn, py::function is_magi_expert_exist_fn,
+    c10::Device device,
 
-        std::vector<torch::Tensor> send_params,
-        std::vector<torch::Tensor> receive_params,
+    std::vector<torch::Tensor> send_params,
+    std::vector<torch::Tensor> receive_params,
 
-        scalar_t* input_buf,
-        scalar_t* global_input_buf,
-        scalar_t* global_output_buf,
-        scalar_t* output_buf,
+    scalar_t *input_buf, scalar_t *global_input_buf,
+    scalar_t *global_output_buf, scalar_t *output_buf,
 
-        const long* local_expert_count,
-        const long* global_expert_count,
+    const long *local_expert_count, const long *global_expert_count,
 
-        const bool* send_models,
-        const bool* receive_models,
+    const bool *send_models, const bool *receive_models,
 
-        long d_model,
-        long num_expert, long rank, long world_size, long expert_size,
-        long pipeline_gran,bool magi_profile_flag, CudaStreamManager* smgr) {
-    smgr->syncTorch();
+    long d_model, long num_expert, long rank, long world_size, long expert_size,
+    long pipeline_gran, bool magi_profile_flag, CudaStreamManager *smgr) {
+  smgr->syncTorch();
 
-    int *local_ptr = new int[num_expert * world_size + 1];
-    int *global_ptr = new int[num_expert * world_size + 1];
-    computePtrs(num_expert, rank, world_size,
-            local_expert_count, global_expert_count,
-            send_models,receive_models,
-            local_ptr, global_ptr,is_magi_expert_exist_fn);
-    if (pipeline_gran > world_size) {
-        pipeline_gran = world_size;
+  int *local_ptr = new int[num_expert * world_size + 1];
+  int *global_ptr = new int[num_expert * world_size + 1];
+  computePtrs(num_expert, rank, world_size, local_expert_count,
+              global_expert_count, send_models, receive_models, local_ptr,
+              global_ptr, is_magi_expert_exist_fn);
+  if (pipeline_gran > world_size) {
+    pipeline_gran = world_size;
+  }
+  long n_groups = world_size / pipeline_gran;
+  long group_rank = rank / pipeline_gran;
+
+  cudaEvent_t *input_ready = new cudaEvent_t[n_groups];
+  cudaEvent_t *output_ready = new cudaEvent_t[n_groups];
+  cudaEvent_t *output_torch_ready = new cudaEvent_t[n_groups];
+  cudaEvent_t *stime_start = new cudaEvent_t[n_groups];
+  cudaEvent_t *ctime_launch = new cudaEvent_t[n_groups];
+  cudaEvent_t *ctime_start = new cudaEvent_t[n_groups];
+  cudaEvent_t *rtime_launch = new cudaEvent_t[n_groups];
+  cudaEvent_t *rtime_start = new cudaEvent_t[n_groups];
+  cudaEvent_t *rtime_end = new cudaEvent_t[n_groups];
+
+  for (long i = 0; i < n_groups; ++i) {
+    cudaEventCreate(input_ready + i);
+    cudaEventCreate(output_ready + i);
+    cudaEventCreate(output_torch_ready + i);
+    cudaEventCreate(stime_start + i);
+    cudaEventCreate(ctime_launch + i);
+    cudaEventCreate(ctime_start + i);
+    cudaEventCreate(rtime_launch + i);
+    cudaEventCreate(rtime_start + i);
+    cudaEventCreate(rtime_end + i);
+  }
+
+  cudaEvent_t *magi_stime_start = new cudaEvent_t[world_size * num_expert];
+  cudaEvent_t *magi_stime_end = new cudaEvent_t[world_size * num_expert];
+  cudaEvent_t *magi_ctime_launch = new cudaEvent_t[world_size * num_expert];
+  cudaEvent_t *magi_ctime_start = new cudaEvent_t[world_size * num_expert];
+  cudaEvent_t *magi_ctime_end = new cudaEvent_t[world_size * num_expert];
+  cudaEvent_t *magi_keep_start = new cudaEvent_t[world_size * num_expert];
+  cudaEvent_t *magi_keep_end = new cudaEvent_t[world_size * num_expert];
+
+  for (long i = 0; i < world_size * num_expert; ++i) {
+    cudaEventCreate(magi_stime_start + i);
+    cudaEventCreate(magi_stime_end + i);
+    cudaEventCreate(magi_ctime_launch + i);
+    cudaEventCreate(magi_ctime_start + i);
+    cudaEventCreate(magi_ctime_end + i);
+    cudaEventCreate(magi_keep_start + i);
+    cudaEventCreate(magi_keep_end + i);
+  }
+
+  // S_0 ... S_n
+  for (long step = 0; step < n_groups; ++step) {
+    if (magi_profile_flag)
+      cudaEventRecord(stime_start[step], smgr->stream(num_expert));
+    for (long ei = 0; ei < num_expert; ++ei) {
+      GEN_BASE(step);
+      NCCL_SAFE_CALL(ncclGroupStart());
+      for (int j = 0; j < pipeline_gran; ++j) {
+        int rank_send = j + to_base;
+        int rank_recv = j + from_base;
+        GEN_IDX;
+        // MAGI_TODO 本地计算的token也会send一趟
+        // 也许直接从input_buf复制到global_input_buf性能会更好？ if send
+        // worker(send to local) has magi_expert(receive or keep), no need to
+        // send
+        exchangeWith(
+            input_buf + local_ptr[idx_send] * d_model,
+            local_expert_count[idx_send] *
+                !receive_models[idx_send * world_size + rank] *
+                !is_magi_expert_exist(is_magi_expert_exist_fn, rank, idx_send),
+            rank_send,
+
+            // if recv worker(receive from global) has magi_expert(receive or
+            // keep), no need to receive
+            global_input_buf + global_ptr[gidx_recv] * d_model,
+            global_expert_count[idx_recv] *
+                !receive_models[idx_self * world_size + rank_recv] *
+                !is_magi_expert_exist(is_magi_expert_exist_fn, rank_recv,
+                                      idx_self),
+            rank_recv,
+
+            d_model, smgr->stream(num_expert), smgr->ncclcomm);
+      }
+      NCCL_SAFE_CALL(ncclGroupEnd());
     }
-    long n_groups = world_size / pipeline_gran;
-    long group_rank = rank / pipeline_gran;
+    cudaEventRecord(input_ready[step], smgr->stream(num_expert));
+  }
+  // Broadcast shadowed experts
+  // cudaEvent_t evt_get, *evt_shadow;
+  // if (send_params.size() > 0) {
+  //     evt_shadow = new cudaEvent_t[send_params.size()];
+  // }
+  // for (long i = 0, si = 0; i < world_size * num_expert; ++i) {
+  //     // 遍历逻辑不对 要改 不支持部分广播 需要自己写一个
+  //     if ((stored_models[i] && (i/num_expert)==rank) ||
+  //     (receive_models[i*world_size+rank])) {
+  //         if (magi_profile_flag) cudaEventRecord(magi_stime_start[i],
+  //         smgr->stream(num_expert)); if (i / num_expert == rank) {
+  //             cudaEventCreate(&evt_get);
+  //             cudaEventRecord(evt_get, smgr->stream(0));
+  //             FMOE_SWE(smgr->stream(num_expert), evt_get);
+  //             cudaEventDestroy(evt_get);
+  //         }
+  //         NCCL_SAFE_CALL(ncclBcast((void*)send_params[si].data_ptr<scalar_t>(),
+  //                     expert_size * sizeof(scalar_t), ncclChar,
+  //                     i / num_expert, smgr->ncclcomm,
+  //                     smgr->stream(num_expert)));
+  //         cudaEventCreate(evt_shadow + si);
+  //         cudaEventRecord(evt_shadow[si], smgr->stream(num_expert));
+  //         ++si;
+  //         if (magi_profile_flag) cudaEventRecord(magi_stime_end[i],
+  //         smgr->stream(num_expert));
+  //     }
+  // }
 
-    cudaEvent_t *input_ready = new cudaEvent_t[n_groups];
-    cudaEvent_t *output_ready = new cudaEvent_t[n_groups];
-    cudaEvent_t *output_torch_ready = new cudaEvent_t[n_groups];
-    cudaEvent_t *stime_start = new cudaEvent_t[n_groups];
-    cudaEvent_t *ctime_launch = new cudaEvent_t[n_groups];
-    cudaEvent_t *ctime_start = new cudaEvent_t[n_groups];
-    cudaEvent_t *rtime_launch = new cudaEvent_t[n_groups];
-    cudaEvent_t *rtime_start = new cudaEvent_t[n_groups];
-    cudaEvent_t *rtime_end = new cudaEvent_t[n_groups];
+  // partial broadcast magi experts
+  cudaEvent_t evt_magi_get, *evt_magi_receive;
+  if (receive_params.size() > 0) {
+    evt_magi_receive = new cudaEvent_t[receive_params.size()];
+  }
+  for (long i = 0, send_params_idx = 0, receive_params_idx = 0;
+       i < world_size * num_expert; ++i) {
+    if (magi_profile_flag)
+      cudaEventRecord(magi_stime_start[i], smgr->stream(num_expert));
+    if (send_models[i]) {
+      NCCL_SAFE_CALL(ncclGroupStart());
+      // send part
+      if (i / num_expert == rank) {
+        cudaEventCreate(&evt_magi_get);
+        cudaEventRecord(evt_magi_get, smgr->stream(0));
+        FMOE_SWE(smgr->stream(num_expert), evt_magi_get);
+        cudaEventDestroy(evt_magi_get);
 
-    for (long i = 0; i < n_groups; ++i) {
-        cudaEventCreate(input_ready + i);
-        cudaEventCreate(output_ready + i);
-        cudaEventCreate(output_torch_ready + i);
-        cudaEventCreate(stime_start + i);
-        cudaEventCreate(ctime_launch + i);
-        cudaEventCreate(ctime_start + i);
-        cudaEventCreate(rtime_launch + i);
-        cudaEventCreate(rtime_start + i);
-        cudaEventCreate(rtime_end + i);
-    }
-
-    cudaEvent_t *magi_stime_start = new cudaEvent_t[world_size*num_expert];
-    cudaEvent_t *magi_stime_end = new cudaEvent_t[world_size*num_expert];
-    cudaEvent_t *magi_ctime_launch = new cudaEvent_t[world_size*num_expert];
-    cudaEvent_t *magi_ctime_start = new cudaEvent_t[world_size*num_expert];
-    cudaEvent_t *magi_ctime_end = new cudaEvent_t[world_size*num_expert];
-    cudaEvent_t *magi_keep_start = new cudaEvent_t[world_size*num_expert];
-    cudaEvent_t *magi_keep_end = new cudaEvent_t[world_size*num_expert];
-
-    for (long i = 0; i < world_size*num_expert; ++i) {
-        cudaEventCreate(magi_stime_start + i);
-        cudaEventCreate(magi_stime_end + i);
-        cudaEventCreate(magi_ctime_launch + i);
-        cudaEventCreate(magi_ctime_start + i);
-        cudaEventCreate(magi_ctime_end + i);
-        cudaEventCreate(magi_keep_start + i);
-        cudaEventCreate(magi_keep_end + i);
-    }
-
-    // S_0 ... S_n
-    for (long step = 0; step < n_groups; ++step) {
-        if (magi_profile_flag) cudaEventRecord(stime_start[step], smgr->stream(num_expert));
-        for (long ei = 0; ei < num_expert; ++ei) {
-            GEN_BASE(step);
-            NCCL_SAFE_CALL(ncclGroupStart());
-            for (int j = 0; j < pipeline_gran; ++j) {
-                int rank_send = j + to_base;
-                int rank_recv = j + from_base;
-                GEN_IDX;
-                // MAGI_TODO 本地计算的token也会send一趟 也许直接从input_buf复制到global_input_buf性能会更好？
-                // if send worker(send to local) has magi_expert(receive or keep), no need to send        
-                exchangeWith(input_buf + local_ptr[idx_send] * d_model,
-                        local_expert_count[idx_send] * !receive_models[idx_send*world_size+rank]*!is_magi_expert_exist(is_magi_expert_exist_fn,rank,idx_send), rank_send,
-
-                        // if recv worker(receive from global) has magi_expert(receive or keep), no need to receive
-                        global_input_buf + global_ptr[gidx_recv] * d_model,
-                        global_expert_count[idx_recv] * !receive_models[idx_self*world_size+rank_recv]*!is_magi_expert_exist(is_magi_expert_exist_fn,rank_recv,idx_self), rank_recv,
-
-                        d_model, smgr->stream(num_expert), smgr->ncclcomm);
-            }
-            NCCL_SAFE_CALL(ncclGroupEnd());
+        for (long j = i * world_size; j < i * world_size + world_size; ++j) {
+          if (receive_models[j]) {
+            NCCL_SAFE_CALL(ncclSend(
+                (void *)send_params[send_params_idx].data_ptr<scalar_t>(),
+                expert_size * sizeof(scalar_t), ncclChar, j % world_size,
+                smgr->ncclcomm, smgr->stream(num_expert)));
+          }
         }
-        cudaEventRecord(input_ready[step], smgr->stream(num_expert));
-    }
-    // Broadcast shadowed experts
-    // cudaEvent_t evt_get, *evt_shadow;
-    // if (send_params.size() > 0) {
-    //     evt_shadow = new cudaEvent_t[send_params.size()];
-    // }
-    // for (long i = 0, si = 0; i < world_size * num_expert; ++i) {
-    //     // 遍历逻辑不对 要改 不支持部分广播 需要自己写一个
-    //     if ((stored_models[i] && (i/num_expert)==rank) || (receive_models[i*world_size+rank])) {
-    //         if (magi_profile_flag) cudaEventRecord(magi_stime_start[i], smgr->stream(num_expert));
-    //         if (i / num_expert == rank) {
-    //             cudaEventCreate(&evt_get);
-    //             cudaEventRecord(evt_get, smgr->stream(0));
-    //             FMOE_SWE(smgr->stream(num_expert), evt_get);
-    //             cudaEventDestroy(evt_get);
-    //         }
-    //         NCCL_SAFE_CALL(ncclBcast((void*)send_params[si].data_ptr<scalar_t>(),
-    //                     expert_size * sizeof(scalar_t), ncclChar,
-    //                     i / num_expert, smgr->ncclcomm, smgr->stream(num_expert)));
-    //         cudaEventCreate(evt_shadow + si);
-    //         cudaEventRecord(evt_shadow[si], smgr->stream(num_expert));
-    //         ++si;
-    //         if (magi_profile_flag) cudaEventRecord(magi_stime_end[i], smgr->stream(num_expert));
-    //     }
-    // }
-
-    // partial broadcast magi experts
-    cudaEvent_t evt_magi_get, *evt_magi_receive;
-    if (receive_params.size() > 0) {
-        evt_magi_receive = new cudaEvent_t[receive_params.size()];
-    }
-    for (long i=0,send_params_idx=0,receive_params_idx=0;i<world_size * num_expert; ++i){
-        if (magi_profile_flag) cudaEventRecord(magi_stime_start[i], smgr->stream(num_expert));
-        if (send_models[i]) {
-            NCCL_SAFE_CALL(ncclGroupStart());
-            //send part
-            if (i/num_expert == rank) {
-                cudaEventCreate(&evt_magi_get);
-                cudaEventRecord(evt_magi_get, smgr->stream(0));
-                FMOE_SWE(smgr->stream(num_expert), evt_magi_get);
-                cudaEventDestroy(evt_magi_get);
-
-                for (long j=i*world_size;j<i*world_size+world_size;++j){
-                    if (receive_models[j]){
-                        NCCL_SAFE_CALL(ncclSend((void*)send_params[send_params_idx].data_ptr<scalar_t>(),expert_size * sizeof(scalar_t), ncclChar,
-                            j%world_size, smgr->ncclcomm, smgr->stream(num_expert)));
-                    }
-                }
-                send_params_idx++;
-            } else {
-            //receive part
-                if(receive_models[i*world_size+rank]){
-                    NCCL_SAFE_CALL(ncclRecv((void*)receive_params[receive_params_idx].data_ptr<scalar_t>(),expert_size * sizeof(scalar_t), ncclChar,
-                        i/num_expert, smgr->ncclcomm, smgr->stream(num_expert)));
-                }
-            }
-            NCCL_SAFE_CALL(ncclGroupEnd());
-            if (i/num_expert != rank && receive_models[i*world_size+rank]){ 
-                cudaEventCreate(evt_magi_receive + receive_params_idx);
-                cudaEventRecord(evt_magi_receive[receive_params_idx], smgr->stream(num_expert));
-                receive_params_idx++;
-            }
+        send_params_idx++;
+      } else {
+        // receive part
+        if (receive_models[i * world_size + rank]) {
+          NCCL_SAFE_CALL(ncclRecv(
+              (void *)receive_params[receive_params_idx].data_ptr<scalar_t>(),
+              expert_size * sizeof(scalar_t), ncclChar, i / num_expert,
+              smgr->ncclcomm, smgr->stream(num_expert)));
         }
-        if (magi_profile_flag) cudaEventRecord(magi_stime_end[i], smgr->stream(num_expert));
+      }
+      NCCL_SAFE_CALL(ncclGroupEnd());
+      if (i / num_expert != rank && receive_models[i * world_size + rank]) {
+        cudaEventCreate(evt_magi_receive + receive_params_idx);
+        cudaEventRecord(evt_magi_receive[receive_params_idx],
+                        smgr->stream(num_expert));
+        receive_params_idx++;
+      }
     }
-    
-     // C_0 ... C_n
-    for (long step = 0; step < n_groups; ++step) {
-        if (magi_profile_flag) cudaEventRecord(ctime_launch[step], smgr->stream(0));
-        FMOE_SWE(smgr->stream(0), input_ready[step]);
-        FMOE_SWE(smgr->torchStream(), input_ready[step]);
-        if (magi_profile_flag) cudaEventRecord(ctime_start[step], smgr->stream(0));
-        for (int ei = 0; ei < num_expert; ++ei) {
-            GEN_BASE(step);
-            long offset = global_ptr[ei * world_size + from_base];
-            long micro_batch_size = global_ptr[ei * world_size +
-                (from_base + pipeline_gran)] - offset;
-            computeFn(forward_fn, device,
-                    global_input_buf, global_output_buf,
-                    (long) ei, step * num_expert + ei, offset, micro_batch_size, d_model, 0,smgr);
-        }
-        cudaEventRecord(output_ready[step], smgr->stream(0));
-        cudaEventRecord(output_torch_ready[step], smgr->torchStream());
+    if (magi_profile_flag)
+      cudaEventRecord(magi_stime_end[i], smgr->stream(num_expert));
+  }
+
+  // C_0 ... C_n
+  for (long step = 0; step < n_groups; ++step) {
+    if (magi_profile_flag)
+      cudaEventRecord(ctime_launch[step], smgr->stream(0));
+    FMOE_SWE(smgr->stream(0), input_ready[step]);
+    FMOE_SWE(smgr->torchStream(), input_ready[step]);
+    if (magi_profile_flag)
+      cudaEventRecord(ctime_start[step], smgr->stream(0));
+    for (int ei = 0; ei < num_expert; ++ei) {
+      GEN_BASE(step);
+      long offset = global_ptr[ei * world_size + from_base];
+      long micro_batch_size =
+          global_ptr[ei * world_size + (from_base + pipeline_gran)] - offset;
+      computeFn(forward_fn, device, global_input_buf, global_output_buf,
+                (long)ei, step * num_expert + ei, offset, micro_batch_size,
+                d_model, 0, smgr);
     }
-    // Compute over shadowed experts
-    // for (long i = 0, si = 0; i < world_size * num_expert; ++i) {
-        
-    //     if (stored_models[i]) {
-    //         if (magi_profile_flag) cudaEventRecord(magi_ctime_launch[i], smgr->stream(0));
-    //         FMOE_SWE(smgr->stream(0), evt_shadow[si]);
-    //         FMOE_SWE(smgr->torchStream(), evt_shadow[si]);
-    //         if (magi_profile_flag) cudaEventRecord(magi_ctime_start[i], smgr->stream(0));
-    //         stash_fn(send_params[si], si, 0); // always put shadowed expert at first, so expert_idx = 0 save shadow_expert in expert0 ,original expert is put in expert_param_stash
-    //         long offset = local_ptr[i];
-    //         long micro_batch_size = local_expert_count[i];
-    //         computeFn(forward_fn, device,
-    //                 input_buf, output_buf,
-    //                 0, n_groups * num_expert + si, offset, micro_batch_size, d_model, smgr);
-    //         ++si;
-    //         if (magi_profile_flag) cudaEventRecord(magi_ctime_end[i], smgr->stream(0));
-    //     }
-        
-    // }
-    // pop_fn(0);
+    cudaEventRecord(output_ready[step], smgr->stream(0));
+    cudaEventRecord(output_torch_ready[step], smgr->torchStream());
+  }
+  // Compute over shadowed experts
+  // for (long i = 0, si = 0; i < world_size * num_expert; ++i) {
 
-    // Compute over magi experts (receive part)
-    for (long i=0,receive_expert_cnt=0;i < world_size*num_expert;++i){
-        if (send_models[i]){
-            if (receive_models[i*world_size+rank]){
-                if (magi_profile_flag) cudaEventRecord(magi_ctime_launch[receive_expert_cnt], smgr->stream(0));
-                FMOE_SWE(smgr->stream(0), evt_magi_receive[receive_expert_cnt]);
-                FMOE_SWE(smgr->torchStream(), evt_magi_receive[receive_expert_cnt]);
-                if (magi_profile_flag) cudaEventRecord(magi_ctime_start[receive_expert_cnt], smgr->stream(0));
-                push_magi_expert_fn(receive_params[receive_expert_cnt],i);
-                long offset = local_ptr[i];
-                long micro_batch_size = local_expert_count[i];
-                computeFn(forward_fn, device,
-                        input_buf, output_buf,
-                        i, n_groups * num_expert + receive_expert_cnt, offset, micro_batch_size, d_model, 1, smgr);
-                if (magi_profile_flag) cudaEventRecord(magi_ctime_end[receive_expert_cnt], smgr->stream(0));
-                ++receive_expert_cnt;
-            }
-        }
+  //     if (stored_models[i]) {
+  //         if (magi_profile_flag) cudaEventRecord(magi_ctime_launch[i],
+  //         smgr->stream(0)); FMOE_SWE(smgr->stream(0), evt_shadow[si]);
+  //         FMOE_SWE(smgr->torchStream(), evt_shadow[si]);
+  //         if (magi_profile_flag) cudaEventRecord(magi_ctime_start[i],
+  //         smgr->stream(0)); stash_fn(send_params[si], si, 0); // always put
+  //         shadowed expert at first, so expert_idx = 0 save shadow_expert in
+  //         expert0 ,original expert is put in expert_param_stash long offset =
+  //         local_ptr[i]; long micro_batch_size = local_expert_count[i];
+  //         computeFn(forward_fn, device,
+  //                 input_buf, output_buf,
+  //                 0, n_groups * num_expert + si, offset, micro_batch_size,
+  //                 d_model, smgr);
+  //         ++si;
+  //         if (magi_profile_flag) cudaEventRecord(magi_ctime_end[i],
+  //         smgr->stream(0));
+  //     }
+
+  // }
+  // pop_fn(0);
+
+  // Compute over magi experts (receive part)
+  for (long i = 0, receive_expert_cnt = 0; i < world_size * num_expert; ++i) {
+    if (send_models[i]) {
+      if (receive_models[i * world_size + rank]) {
+        if (magi_profile_flag)
+          cudaEventRecord(magi_ctime_launch[receive_expert_cnt],
+                          smgr->stream(0));
+        FMOE_SWE(smgr->stream(0), evt_magi_receive[receive_expert_cnt]);
+        FMOE_SWE(smgr->torchStream(), evt_magi_receive[receive_expert_cnt]);
+        if (magi_profile_flag)
+          cudaEventRecord(magi_ctime_start[receive_expert_cnt],
+                          smgr->stream(0));
+        push_magi_expert_fn(receive_params[receive_expert_cnt], i);
+        long offset = local_ptr[i];
+        long micro_batch_size = local_expert_count[i];
+        computeFn(forward_fn, device, input_buf, output_buf, i,
+                  n_groups * num_expert + receive_expert_cnt, offset,
+                  micro_batch_size, d_model, 1, smgr);
+        if (magi_profile_flag)
+          cudaEventRecord(magi_ctime_end[receive_expert_cnt], smgr->stream(0));
+        ++receive_expert_cnt;
+      }
     }
+  }
 
-    // Compute over magi experts (keep part)
-    for (long i=0,keep_expert_cnt=0;i < world_size*num_expert;++i){
-        if (magi_profile_flag) cudaEventRecord(magi_keep_start[i], smgr->stream(0));
-        if (is_magi_expert_exist(is_magi_expert_exist_fn,rank,i)){
-            long offset = local_ptr[i];
-            long micro_batch_size = local_expert_count[i];
-            computeFn(forward_fn, device,
-                    input_buf, output_buf,
-                    i, n_groups * num_expert +receive_params.size() + keep_expert_cnt, offset, micro_batch_size, d_model, 1, smgr);
-            ++keep_expert_cnt;
-        }
-        if (magi_profile_flag) cudaEventRecord(magi_keep_end[i], smgr->stream(0));
+  // Compute over magi experts (keep part)
+  for (long i = 0, keep_expert_cnt = 0; i < world_size * num_expert; ++i) {
+    if (magi_profile_flag)
+      cudaEventRecord(magi_keep_start[i], smgr->stream(0));
+    if (is_magi_expert_exist(is_magi_expert_exist_fn, rank, i)) {
+      long offset = local_ptr[i];
+      long micro_batch_size = local_expert_count[i];
+      computeFn(forward_fn, device, input_buf, output_buf, i,
+                n_groups * num_expert + receive_params.size() + keep_expert_cnt,
+                offset, micro_batch_size, d_model, 1, smgr);
+      ++keep_expert_cnt;
     }
-    // pop_fn(0);
+    if (magi_profile_flag)
+      cudaEventRecord(magi_keep_end[i], smgr->stream(0));
+  }
+  // pop_fn(0);
 
-    // R_0 ... R_n
-    for (long step = 0; step < n_groups; ++step) {
-        if (magi_profile_flag) cudaEventRecord(rtime_launch[step], smgr->stream(num_expert));
-        FMOE_SWE(smgr->stream(num_expert), output_ready[step]);
-        FMOE_SWE(smgr->stream(num_expert), output_torch_ready[step]);
-        if (magi_profile_flag) cudaEventRecord(rtime_start[step], smgr->stream(num_expert));
-        for (int ei = 0; ei < num_expert; ++ei) {
-            GEN_BASE(step);
-            NCCL_SAFE_CALL(ncclGroupStart());
-            for (int j = 0; j < pipeline_gran; ++j) {
-                int rank_send = j + from_base;
-                int rank_recv = j + to_base;
-                GEN_IDX;
-                exchangeWith(global_output_buf + global_ptr[gidx_send] * d_model,
-                        global_expert_count[idx_send] * !receive_models[idx_self*world_size+rank_send]*!is_magi_expert_exist(is_magi_expert_exist_fn,rank_send,idx_self), rank_send,
+  // R_0 ... R_n
+  for (long step = 0; step < n_groups; ++step) {
+    if (magi_profile_flag)
+      cudaEventRecord(rtime_launch[step], smgr->stream(num_expert));
+    FMOE_SWE(smgr->stream(num_expert), output_ready[step]);
+    FMOE_SWE(smgr->stream(num_expert), output_torch_ready[step]);
+    if (magi_profile_flag)
+      cudaEventRecord(rtime_start[step], smgr->stream(num_expert));
+    for (int ei = 0; ei < num_expert; ++ei) {
+      GEN_BASE(step);
+      NCCL_SAFE_CALL(ncclGroupStart());
+      for (int j = 0; j < pipeline_gran; ++j) {
+        int rank_send = j + from_base;
+        int rank_recv = j + to_base;
+        GEN_IDX;
+        exchangeWith(
+            global_output_buf + global_ptr[gidx_send] * d_model,
+            global_expert_count[idx_send] *
+                !receive_models[idx_self * world_size + rank_send] *
+                !is_magi_expert_exist(is_magi_expert_exist_fn, rank_send,
+                                      idx_self),
+            rank_send,
 
-                        output_buf + local_ptr[idx_recv] * d_model,
-                        local_expert_count[idx_recv] * !receive_models[idx_recv*world_size+rank]*!is_magi_expert_exist(is_magi_expert_exist_fn,rank,idx_recv), rank_recv,
-                        d_model, smgr->stream(num_expert), smgr->ncclcomm);
-            }
-            NCCL_SAFE_CALL(ncclGroupEnd());
-        }
-        if (magi_profile_flag) cudaEventRecord(rtime_end[step], smgr->stream(num_expert));
+            output_buf + local_ptr[idx_recv] * d_model,
+            local_expert_count[idx_recv] *
+                !receive_models[idx_recv * world_size + rank] *
+                !is_magi_expert_exist(is_magi_expert_exist_fn, rank, idx_recv),
+            rank_recv, d_model, smgr->stream(num_expert), smgr->ncclcomm);
+      }
+      NCCL_SAFE_CALL(ncclGroupEnd());
     }
-    
-    if (magi_profile_flag) {
-        float milliseconds = 0.0f, stime = 0.0f, ctime_wait = 0.0f, ctime = 0.0f, rtime_wait = 0.0f, rtime = 0.0f, magi_stime = 0.0f,magi_ctime_wait = 0.0f, magi_ctime = 0.0f ,keep_ctime = 0.0f;
+    if (magi_profile_flag)
+      cudaEventRecord(rtime_end[step], smgr->stream(num_expert));
+  }
 
-        for (int step=0; step < n_groups; ++step){
-            cudaEventSynchronize(input_ready[step]);
-            cudaEventElapsedTime(&milliseconds, stime_start[step], input_ready[step]);
-            stime+=milliseconds;
-            cudaEventSynchronize(ctime_start[step]);
-            cudaEventElapsedTime(&milliseconds, ctime_launch[step], ctime_start[step]);
-            ctime_wait+=milliseconds;
-            cudaEventSynchronize(output_ready[step]);
-            cudaEventElapsedTime(&milliseconds, ctime_start[step], output_ready[step]);
-            ctime+=milliseconds;
-            cudaEventSynchronize(rtime_start[step]);
-            cudaEventElapsedTime(&milliseconds, rtime_launch[step], rtime_start[step]);
-            rtime_wait+=milliseconds;
-            cudaEventSynchronize(rtime_end[step]);
-            cudaEventElapsedTime(&milliseconds, rtime_start[step], rtime_end[step]);
-            rtime+=milliseconds;
-        }
+  if (magi_profile_flag) {
+    float milliseconds = 0.0f, stime = 0.0f, ctime_wait = 0.0f, ctime = 0.0f,
+          rtime_wait = 0.0f, rtime = 0.0f, magi_stime = 0.0f,
+          magi_ctime_wait = 0.0f, magi_ctime = 0.0f, keep_ctime = 0.0f;
 
-        for (int i=0;i<world_size*num_expert; ++i){
-            cudaEventSynchronize(magi_stime_end[i]);
-            cudaEventElapsedTime(&milliseconds, magi_stime_start[i], magi_stime_end[i]);
-            magi_stime+=milliseconds;
-            cudaEventSynchronize(magi_keep_end[i]);
-            cudaEventElapsedTime(&milliseconds, magi_keep_start[i], magi_keep_end[i]);
-            keep_ctime+=milliseconds;
-
-        }
-        for (unsigned i=0; i<receive_params.size(); ++i){
-            cudaEventSynchronize(magi_ctime_start[i]);
-            cudaEventElapsedTime(&milliseconds, magi_ctime_launch[i], magi_ctime_start[i]);
-            magi_ctime_wait+=milliseconds;
-            cudaEventSynchronize(magi_ctime_end[i]);
-            cudaEventElapsedTime(&milliseconds, magi_ctime_start[i], magi_ctime_end[i]);
-            magi_ctime+=milliseconds;
-        }
-        record_layer_time_fn(stime,ctime,ctime_wait,rtime,rtime_wait,magi_stime,magi_ctime,magi_ctime_wait,keep_ctime);
-    }
-
-    smgr->sync(num_expert + 1);
-
-    delete [] local_ptr;
-    delete [] global_ptr;
-
-    checkCudaErrors(cudaGetLastError());
-    for (long i = 0; i < n_groups; ++i) {
-        cudaEventDestroy(input_ready[i]);
-        cudaEventDestroy(output_ready[i]);
-        cudaEventDestroy(output_torch_ready[i]);
-        cudaEventDestroy(stime_start[i]);
-        cudaEventDestroy(ctime_launch[i]);
-        cudaEventDestroy(ctime_start[i]);
-        cudaEventDestroy(rtime_launch[i]);
-        cudaEventDestroy(rtime_start[i]);
-        cudaEventDestroy(rtime_end[i]);
-    }
-
-    for (long i=0; i<world_size*num_expert; ++i){
-        cudaEventDestroy(magi_stime_start[i]);
-        cudaEventDestroy(magi_stime_end[i]);
-        cudaEventDestroy(magi_ctime_launch[i]);
-        cudaEventDestroy(magi_ctime_start[i]);
-        cudaEventDestroy(magi_ctime_end[i]);
-        cudaEventDestroy(magi_keep_start[i]);
-        cudaEventDestroy(magi_keep_end[i]);
+    for (int step = 0; step < n_groups; ++step) {
+      cudaEventSynchronize(input_ready[step]);
+      cudaEventElapsedTime(&milliseconds, stime_start[step], input_ready[step]);
+      stime += milliseconds;
+      cudaEventSynchronize(ctime_start[step]);
+      cudaEventElapsedTime(&milliseconds, ctime_launch[step],
+                           ctime_start[step]);
+      ctime_wait += milliseconds;
+      cudaEventSynchronize(output_ready[step]);
+      cudaEventElapsedTime(&milliseconds, ctime_start[step],
+                           output_ready[step]);
+      ctime += milliseconds;
+      cudaEventSynchronize(rtime_start[step]);
+      cudaEventElapsedTime(&milliseconds, rtime_launch[step],
+                           rtime_start[step]);
+      rtime_wait += milliseconds;
+      cudaEventSynchronize(rtime_end[step]);
+      cudaEventElapsedTime(&milliseconds, rtime_start[step], rtime_end[step]);
+      rtime += milliseconds;
     }
 
-    
-    delete [] input_ready;
-    delete [] output_ready;
-    delete [] output_torch_ready;
-    delete [] stime_start;
-    delete [] ctime_launch;
-    delete [] ctime_start;
-    delete [] rtime_launch;
-    delete [] rtime_start;
-    delete [] rtime_end;
-    delete [] magi_stime_start;
-    delete [] magi_stime_end;
-    delete [] magi_ctime_launch;
-    delete [] magi_ctime_start;
-    delete [] magi_ctime_end;
-    delete [] magi_keep_start;
-    delete [] magi_keep_end;
+    for (int i = 0; i < world_size * num_expert; ++i) {
+      cudaEventSynchronize(magi_stime_end[i]);
+      cudaEventElapsedTime(&milliseconds, magi_stime_start[i],
+                           magi_stime_end[i]);
+      magi_stime += milliseconds;
+      cudaEventSynchronize(magi_keep_end[i]);
+      cudaEventElapsedTime(&milliseconds, magi_keep_start[i], magi_keep_end[i]);
+      keep_ctime += milliseconds;
+    }
+    for (unsigned i = 0; i < receive_params.size(); ++i) {
+      cudaEventSynchronize(magi_ctime_start[i]);
+      cudaEventElapsedTime(&milliseconds, magi_ctime_launch[i],
+                           magi_ctime_start[i]);
+      magi_ctime_wait += milliseconds;
+      cudaEventSynchronize(magi_ctime_end[i]);
+      cudaEventElapsedTime(&milliseconds, magi_ctime_start[i],
+                           magi_ctime_end[i]);
+      magi_ctime += milliseconds;
+    }
+    record_layer_time_fn(stime, ctime, ctime_wait, rtime, rtime_wait,
+                         magi_stime, magi_ctime, magi_ctime_wait, keep_ctime);
+  }
+
+  smgr->sync(num_expert + 1);
+
+  delete[] local_ptr;
+  delete[] global_ptr;
+
+  checkCudaErrors(cudaGetLastError());
+  for (long i = 0; i < n_groups; ++i) {
+    cudaEventDestroy(input_ready[i]);
+    cudaEventDestroy(output_ready[i]);
+    cudaEventDestroy(output_torch_ready[i]);
+    cudaEventDestroy(stime_start[i]);
+    cudaEventDestroy(ctime_launch[i]);
+    cudaEventDestroy(ctime_start[i]);
+    cudaEventDestroy(rtime_launch[i]);
+    cudaEventDestroy(rtime_start[i]);
+    cudaEventDestroy(rtime_end[i]);
+  }
+
+  for (long i = 0; i < world_size * num_expert; ++i) {
+    cudaEventDestroy(magi_stime_start[i]);
+    cudaEventDestroy(magi_stime_end[i]);
+    cudaEventDestroy(magi_ctime_launch[i]);
+    cudaEventDestroy(magi_ctime_start[i]);
+    cudaEventDestroy(magi_ctime_end[i]);
+    cudaEventDestroy(magi_keep_start[i]);
+    cudaEventDestroy(magi_keep_end[i]);
+  }
+
+  delete[] input_ready;
+  delete[] output_ready;
+  delete[] output_torch_ready;
+  delete[] stime_start;
+  delete[] ctime_launch;
+  delete[] ctime_start;
+  delete[] rtime_launch;
+  delete[] rtime_start;
+  delete[] rtime_end;
+  delete[] magi_stime_start;
+  delete[] magi_stime_end;
+  delete[] magi_ctime_launch;
+  delete[] magi_ctime_start;
+  delete[] magi_ctime_end;
+  delete[] magi_keep_start;
+  delete[] magi_keep_end;
 }
 
-
-template<typename scalar_t>
+template <typename scalar_t>
 void fmoe_cuda_fused_backward_impl(
-        py::function backward_fn,
-        py::function is_magi_expert_exist_fn,
-        py::function is_global_magi_expert_exist_fn,
-        py::function collect_fn,
-        py::function set_grad_fn,
-        c10::Device device,
+    py::function backward_fn, py::function is_magi_expert_exist_fn,
+    py::function is_global_magi_expert_exist_fn, py::function collect_fn,
+    py::function set_grad_fn, c10::Device device,
 
-        scalar_t* grad_out,
-        scalar_t* global_grad_out,
-        scalar_t* global_grad_in,
-        scalar_t* grad_in,
+    scalar_t *grad_out, scalar_t *global_grad_out, scalar_t *global_grad_in,
+    scalar_t *grad_in,
 
-        const long* local_expert_count,
-        const long* global_expert_count,
-        const bool* send_models,
-        const bool* receive_models,
-        long d_model,
-        long num_expert, long rank, long world_size,
-        long pipeline_gran, CudaStreamManager* smgr) {
-    smgr->syncTorch();
+    const long *local_expert_count, const long *global_expert_count,
+    const bool *send_models, const bool *receive_models, long d_model,
+    long num_expert, long rank, long world_size, long pipeline_gran,
+    CudaStreamManager *smgr) {
+  smgr->syncTorch();
 
-    int *local_ptr = new int[num_expert * world_size + 1];
-    int *global_ptr = new int[num_expert * world_size + 1];
+  int *local_ptr = new int[num_expert * world_size + 1];
+  int *global_ptr = new int[num_expert * world_size + 1];
 
-    computePtrs(num_expert, rank, world_size,
-            local_expert_count, global_expert_count,
-            send_models,receive_models,
-            local_ptr, global_ptr,is_magi_expert_exist_fn);
-    if (pipeline_gran > world_size) {
-        pipeline_gran = world_size;
+  computePtrs(num_expert, rank, world_size, local_expert_count,
+              global_expert_count, send_models, receive_models, local_ptr,
+              global_ptr, is_magi_expert_exist_fn);
+  if (pipeline_gran > world_size) {
+    pipeline_gran = world_size;
+  }
+  long n_groups = world_size / pipeline_gran;
+  long group_rank = rank / pipeline_gran;
+
+  cudaEvent_t *input_ready = new cudaEvent_t[n_groups];
+  cudaEvent_t *output_ready = new cudaEvent_t[n_groups];
+  cudaEvent_t *output_torch_ready = new cudaEvent_t[n_groups];
+  for (long i = 0; i < n_groups; ++i) {
+    cudaEventCreate(input_ready + i);
+    cudaEventCreate(output_ready + i);
+    cudaEventCreate(output_torch_ready + i);
+  }
+
+  // S_0 ... S_n
+  for (long step = 0; step < n_groups; ++step) {
+    for (int ei = 0; ei < num_expert; ++ei) {
+      GEN_BASE(step);
+      NCCL_SAFE_CALL(ncclGroupStart());
+      for (int j = 0; j < pipeline_gran; ++j) {
+        int rank_send = j + to_base;
+        int rank_recv = j + from_base;
+        GEN_IDX;
+        exchangeWith(
+            grad_out + local_ptr[idx_send] * d_model,
+            local_expert_count[idx_send] *
+                !receive_models[idx_send * world_size + rank] *
+                !is_magi_expert_exist(is_magi_expert_exist_fn, rank, idx_send),
+            rank_send,
+
+            global_grad_out + global_ptr[gidx_recv] * d_model,
+            global_expert_count[idx_recv] *
+                !receive_models[idx_self * world_size + rank_recv] *
+                !is_magi_expert_exist(is_magi_expert_exist_fn, rank_recv,
+                                      idx_self),
+            rank_recv,
+
+            d_model, smgr->stream(num_expert), smgr->ncclcomm);
+      }
+      NCCL_SAFE_CALL(ncclGroupEnd());
     }
-    long n_groups = world_size / pipeline_gran;
-    long group_rank = rank / pipeline_gran;
+    cudaEventRecord(input_ready[step], smgr->stream(num_expert));
+  }
 
-    cudaEvent_t *input_ready = new cudaEvent_t[n_groups];
-    cudaEvent_t *output_ready = new cudaEvent_t[n_groups];
-    cudaEvent_t *output_torch_ready = new cudaEvent_t[n_groups];
-    for (long i = 0; i < n_groups; ++i) {
-        cudaEventCreate(input_ready + i);
-        cudaEventCreate(output_ready + i);
-        cudaEventCreate(output_torch_ready + i);
+  // // Shadowed experts backward and reduce
+  // cudaEvent_t *evt_reduce = new cudaEvent_t[num_expert];
+  // for (long i = 0, si = 0; i < world_size * num_expert; ++i) {
+  //     if (send_models[i]) {
+  //         stash_fn(si, 0);
+  //         long offset = local_ptr[i];
+  //         long micro_batch_size = local_expert_count[i];
+  //         computeFn(backward_fn, device,
+  //                 grad_out, grad_in,
+  //                 0, n_groups * num_expert + si, offset, micro_batch_size,
+  //                 d_model, smgr);
+  //         collect_fn(si, i / num_expert, 0);
+  //         if (i / num_expert == rank) {
+  //             cudaEventCreate(evt_reduce + i % num_expert);
+  //             cudaEventRecord(evt_reduce[i % num_expert], smgr->stream(0));
+  //         }
+  //         ++si;
+  //     }
+  // }
+  // pop_fn(0);
+
+  long receive_expert_num = 0;
+  // magi experts backward and reduce (receive part)
+  cudaEvent_t *evt_receive_reduce = new cudaEvent_t[num_expert * world_size];
+  for (long i = 0, receive_expert_cnt = 0; i < world_size * num_expert; ++i) {
+    if (send_models[i]) {
+      if (receive_models[i * world_size + rank]) {
+        long offset = local_ptr[i];
+        long micro_batch_size = local_expert_count[i];
+        computeFn(backward_fn, device, grad_out, grad_in, i,
+                  n_groups * num_expert + receive_expert_cnt, offset,
+                  micro_batch_size, d_model, 1, smgr);
+        collect_fn(i, 1, 0);
+        ++receive_expert_cnt;
+        ++receive_expert_num;
+      } else {
+        collect_fn(i, 0, 0);
+      }
+      cudaEventCreate(evt_receive_reduce + i);
+      cudaEventRecord(evt_receive_reduce[i], smgr->stream(0));
     }
+  }
 
-    // S_0 ... S_n
-    for (long step = 0; step < n_groups; ++step) {
-        for (int ei = 0; ei < num_expert; ++ei) {
-            GEN_BASE(step);
-            NCCL_SAFE_CALL(ncclGroupStart());
-            for (int j = 0; j < pipeline_gran; ++j) {
-                int rank_send = j + to_base;
-                int rank_recv = j + from_base;
-                GEN_IDX;
-                exchangeWith(grad_out + local_ptr[idx_send] * d_model,
-                        local_expert_count[idx_send] * !receive_models[idx_send*world_size+rank]*!is_magi_expert_exist(is_magi_expert_exist_fn,rank,idx_send), rank_send,
-
-                        global_grad_out + global_ptr[gidx_recv] * d_model,
-                        global_expert_count[idx_recv] * !receive_models[idx_self*world_size+rank_recv]*!is_magi_expert_exist(is_magi_expert_exist_fn,rank_recv,idx_self), rank_recv,
-
-                        d_model, smgr->stream(num_expert), smgr->ncclcomm);
-            }
-            NCCL_SAFE_CALL(ncclGroupEnd());
-        }
-        cudaEventRecord(input_ready[step], smgr->stream(num_expert));
+  // magi experts backward and reduce (keep part)
+  cudaEvent_t *evt_keep_reduce = new cudaEvent_t[num_expert * world_size];
+  for (long i = 0, keep_expert_cnt = 0; i < world_size * num_expert; ++i) {
+    torch::Tensor bool_tensor = torch::zeros({1}, torch::kBool);
+    is_global_magi_expert_exist_fn(bool_tensor, i);
+    bool global_exist_flag = bool_tensor.data_ptr<bool>()[0];
+    if (global_exist_flag) {
+      if (is_magi_expert_exist(is_magi_expert_exist_fn, rank, i)) {
+        long offset = local_ptr[i];
+        long micro_batch_size = local_expert_count[i];
+        computeFn(backward_fn, device, grad_out, grad_in, i,
+                  n_groups * num_expert + receive_expert_num + keep_expert_cnt,
+                  offset, micro_batch_size, d_model, 1, smgr);
+        collect_fn(i, 1, 1);
+        ++keep_expert_cnt;
+      } else {
+        collect_fn(i, 0, 1);
+      }
+      cudaEventCreate(evt_keep_reduce + i);
+      cudaEventRecord(evt_keep_reduce[i], smgr->stream(0));
     }
+  }
+  // pop_fn(0);
 
-    // // Shadowed experts backward and reduce
-    // cudaEvent_t *evt_reduce = new cudaEvent_t[num_expert];
-    // for (long i = 0, si = 0; i < world_size * num_expert; ++i) {
-    //     if (send_models[i]) {
-    //         stash_fn(si, 0);
-    //         long offset = local_ptr[i];
-    //         long micro_batch_size = local_expert_count[i];
-    //         computeFn(backward_fn, device,
-    //                 grad_out, grad_in,
-    //                 0, n_groups * num_expert + si, offset, micro_batch_size, d_model, smgr);
-    //         collect_fn(si, i / num_expert, 0);
-    //         if (i / num_expert == rank) {
-    //             cudaEventCreate(evt_reduce + i % num_expert);
-    //             cudaEventRecord(evt_reduce[i % num_expert], smgr->stream(0));
-    //         }
-    //         ++si;
-    //     }
-    // }
-    // pop_fn(0);
-    
-    long receive_expert_num = 0;
-    // magi experts backward and reduce (receive part)
-    cudaEvent_t *evt_receive_reduce = new cudaEvent_t[num_expert*world_size];
-    for (long i = 0, receive_expert_cnt = 0; i < world_size * num_expert; ++i) {
-        if (send_models[i]) {
-            if (receive_models[i*world_size+rank]){
-                long offset = local_ptr[i];
-                long micro_batch_size = local_expert_count[i];
-                computeFn(backward_fn, device,
-                        grad_out, grad_in,
-                        i, n_groups * num_expert + receive_expert_cnt, offset, micro_batch_size, d_model, 1, smgr);
-                collect_fn(i, 1, 0);
-                ++receive_expert_cnt;
-                ++receive_expert_num;
-            }else{
-                collect_fn(i, 0, 0);
-            }
-            cudaEventCreate(evt_receive_reduce + i);
-            cudaEventRecord(evt_receive_reduce[i], smgr->stream(0));
-        }
+  // C_0 ... C_n
+  for (long step = 0; step < n_groups; ++step) {
+    FMOE_SWE(smgr->stream(0), input_ready[step]);
+    FMOE_SWE(smgr->torchStream(), input_ready[step]);
+    for (int ei = 0; ei < num_expert; ++ei) {
+      GEN_BASE(step);
+      long offset = global_ptr[ei * world_size + from_base];
+      long micro_batch_size =
+          global_ptr[ei * world_size + (from_base + pipeline_gran)] - offset;
+      computeFn(backward_fn, device, global_grad_out, global_grad_in, (long)ei,
+                step * num_expert + ei, offset, micro_batch_size, d_model, 0,
+                smgr);
     }
+    cudaEventRecord(output_ready[step], smgr->stream(0));
+    cudaEventRecord(output_torch_ready[step], smgr->torchStream());
+  }
 
-    // magi experts backward and reduce (keep part)
-    cudaEvent_t *evt_keep_reduce = new cudaEvent_t[num_expert*world_size];
-    for (long i = 0, keep_expert_cnt = 0; i < world_size * num_expert; ++i) {
-        torch::Tensor bool_tensor = torch::zeros({1}, torch::kBool);
-        is_global_magi_expert_exist_fn(bool_tensor,i);
-        bool global_exist_flag = bool_tensor.data_ptr<bool>()[0];
-        if (global_exist_flag){
-            if (is_magi_expert_exist(is_magi_expert_exist_fn,rank,i)) {
-                long offset = local_ptr[i];
-                long micro_batch_size = local_expert_count[i];
-                computeFn(backward_fn, device,
-                        grad_out, grad_in,
-                        i, n_groups * num_expert + receive_expert_num + keep_expert_cnt, offset, micro_batch_size, d_model, 1, smgr);
-                collect_fn(i, 1, 1);
-                ++keep_expert_cnt;
-            } else {
-                collect_fn(i, 0, 1);
-            }
-            cudaEventCreate(evt_keep_reduce + i);
-            cudaEventRecord(evt_keep_reduce[i], smgr->stream(0));
-        }
+  // Collect gradients for magi experts
+  for (long i = 0; i < world_size * num_expert; ++i) {
+    if (send_models[i]) {
+      // receive part
+      FMOE_SWE(smgr->torchStream(), evt_receive_reduce[i]);
+      if (receive_models[i * world_size + rank]) {
+        set_grad_fn(i, 0);
+      } else if (i / num_expert == rank) {
+        set_grad_fn(i, 2);
+      }
+    } else if (is_magi_expert_exist(is_magi_expert_exist_fn, rank, i)) {
+      // keep part
+      FMOE_SWE(smgr->torchStream(), evt_keep_reduce[i]);
+      set_grad_fn(i, 1);
     }
-    // pop_fn(0);
+  }
 
-    // C_0 ... C_n
-    for (long step = 0; step < n_groups; ++step) {
-        FMOE_SWE(smgr->stream(0), input_ready[step]);
-        FMOE_SWE(smgr->torchStream(), input_ready[step]);
-        for (int ei = 0; ei < num_expert; ++ei) {
-            GEN_BASE(step);
-            long offset = global_ptr[ei * world_size + from_base];
-            long micro_batch_size = global_ptr[ei * world_size +
-                (from_base + pipeline_gran)] - offset;
-            computeFn(backward_fn, device,
-                    global_grad_out, global_grad_in,
-                    (long) ei, step * num_expert + ei, offset, micro_batch_size, d_model, 0, smgr);
-        }
-        cudaEventRecord(output_ready[step], smgr->stream(0));
-        cudaEventRecord(output_torch_ready[step], smgr->torchStream());
+  // R_0 ... R_n
+  for (long step = 0; step < n_groups; ++step) {
+    FMOE_SWE(smgr->stream(num_expert), output_ready[step]);
+    FMOE_SWE(smgr->stream(num_expert), output_torch_ready[step]);
+    for (int ei = 0; ei < num_expert; ++ei) {
+      GEN_BASE(step);
+      NCCL_SAFE_CALL(ncclGroupStart());
+      for (int j = 0; j < pipeline_gran; ++j) {
+        int rank_send = j + from_base;
+        int rank_recv = j + to_base;
+        GEN_IDX;
+        exchangeWith(
+            global_grad_in + global_ptr[gidx_send] * d_model,
+            global_expert_count[idx_send] *
+                !receive_models[idx_self * world_size + rank_send] *
+                !is_magi_expert_exist(is_magi_expert_exist_fn, rank_send,
+                                      idx_self),
+            rank_send,
+
+            grad_in + local_ptr[idx_recv] * d_model,
+            local_expert_count[idx_recv] *
+                !receive_models[idx_recv * world_size + rank] *
+                !is_magi_expert_exist(is_magi_expert_exist_fn, rank, idx_recv),
+            rank_recv, d_model, smgr->stream(num_expert), smgr->ncclcomm);
+      }
+      NCCL_SAFE_CALL(ncclGroupEnd());
     }
+  }
 
-    // Collect gradients for magi experts
-    for (long i = 0; i < world_size * num_expert; ++i) {       
-        if (send_models[i]) {
-            // receive part
-            FMOE_SWE(smgr->torchStream(), evt_receive_reduce[i]);
-            if (receive_models[i*world_size+rank]){
-                set_grad_fn(i, 0);
-            } else if (i / num_expert == rank){
-                set_grad_fn(i, 2);
-            }
-        }else if (is_magi_expert_exist(is_magi_expert_exist_fn,rank,i)){
-            // keep part
-            FMOE_SWE(smgr->torchStream(), evt_keep_reduce[i]);
-            set_grad_fn(i, 1);
-        }
+  smgr->sync(num_expert + 1);
+  checkCudaErrors(cudaGetLastError());
+
+  delete[] local_ptr;
+  delete[] global_ptr;
+  checkCudaErrors(cudaGetLastError());
+  for (long i = 0; i < n_groups; ++i) {
+    cudaEventDestroy(input_ready[i]);
+    cudaEventDestroy(output_ready[i]);
+    cudaEventDestroy(output_torch_ready[i]);
+  }
+  delete[] input_ready;
+  delete[] output_ready;
+  delete[] output_torch_ready;
+  for (long i = 0; i < num_expert * world_size; ++i) {
+    int receive_cnt = 0, keep_cnt = 0;
+    if (send_models[i]) {
+      cudaEventDestroy(evt_receive_reduce[i]);
+      receive_cnt++;
     }
-
-    // R_0 ... R_n
-    for (long step = 0; step < n_groups; ++step) {
-        FMOE_SWE(smgr->stream(num_expert), output_ready[step]);
-        FMOE_SWE(smgr->stream(num_expert), output_torch_ready[step]);
-        for (int ei = 0; ei < num_expert; ++ei) {
-            GEN_BASE(step);
-            NCCL_SAFE_CALL(ncclGroupStart());
-            for (int j = 0; j < pipeline_gran; ++j) {
-                int rank_send = j + from_base;
-                int rank_recv = j + to_base;
-                GEN_IDX;
-                exchangeWith(global_grad_in + global_ptr[gidx_send] * d_model,
-                        global_expert_count[idx_send] * !receive_models[idx_self*world_size+rank_send]*!is_magi_expert_exist(is_magi_expert_exist_fn,rank_send,idx_self), rank_send,
-
-                        grad_in + local_ptr[idx_recv] * d_model,
-                        local_expert_count[idx_recv] * !receive_models[idx_recv*world_size+rank]*!is_magi_expert_exist(is_magi_expert_exist_fn,rank,idx_recv),rank_recv,
-                        d_model, smgr->stream(num_expert), smgr->ncclcomm);
-            }
-            NCCL_SAFE_CALL(ncclGroupEnd());
-        }
+    if (is_magi_expert_exist(is_magi_expert_exist_fn, rank, i)) {
+      cudaEventDestroy(evt_keep_reduce[i]);
+      keep_cnt++;
     }
-
-    smgr->sync(num_expert + 1);
-    checkCudaErrors(cudaGetLastError());
-
-    delete [] local_ptr;
-    delete [] global_ptr;
-    checkCudaErrors(cudaGetLastError());
-    for (long i = 0; i < n_groups; ++i) {
-        cudaEventDestroy(input_ready[i]);
-        cudaEventDestroy(output_ready[i]);
-        cudaEventDestroy(output_torch_ready[i]);
-    }
-    delete [] input_ready;
-    delete [] output_ready;
-    delete [] output_torch_ready;
-    for (long i = 0; i < num_expert*world_size; ++i) {
-        int receive_cnt=0,keep_cnt=0;
-        if (send_models[i]) {
-            cudaEventDestroy(evt_receive_reduce[i]);
-            receive_cnt++;
-        }
-        if (is_magi_expert_exist(is_magi_expert_exist_fn,rank,i)){
-            cudaEventDestroy(evt_keep_reduce[i]);
-            keep_cnt++;
-        }
-    }
-    delete [] evt_keep_reduce;
-    delete [] evt_receive_reduce; 
+  }
+  delete[] evt_keep_reduce;
+  delete[] evt_receive_reduce;
 }
 
-#endif  // SMART_SCHEDULE_H
-
+#endif // SMART_SCHEDULE_H

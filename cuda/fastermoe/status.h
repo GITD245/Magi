@@ -5,4 +5,4 @@
 int isSmartSchEnabled();
 void setSmartSchEnabled(int);
 
-#endif  // FASTER_STATUS_H
+#endif // FASTER_STATUS_H
