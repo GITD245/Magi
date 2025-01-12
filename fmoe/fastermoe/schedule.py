@@ -12,8 +12,6 @@ import fmoe_cuda as fmoe_native
 # from fmoe.fastermoe import expert_utils
 from magi import expert_utils
 
-
-
 class MoEForward(Function):
     @staticmethod
     def forward(
@@ -25,6 +23,7 @@ class MoEForward(Function):
             local_expert_count, global_expert_count,
             send_models,
             receive_models,
+            keep_models,
             fwd_batch_size, out_batch_size,
             num_expert,
             world_size,
@@ -87,6 +86,7 @@ class MoEForward(Function):
                 global_expert_count, 
                 send_models,
                 receive_models,
+                keep_models,
                 fwd_batch_size,
                 ctx.expert_size,
                 world_size,
@@ -94,7 +94,6 @@ class MoEForward(Function):
                 _expert_forward,
                 magi_expert.registe_magi_expert,
                 magi_expert.push_magi_expert,
-                magi_runtime.is_magi_expert_exist,
                 magi_runtime.record_layer_time)
         
         out = _local_gather(local_output_buf, pos_g, out_batch_size,
@@ -103,7 +102,7 @@ class MoEForward(Function):
         # gib and local_input_buf are necessary, because ctx.gibs are created
         # based on their memory
         variables = (pos_s, pos_g, local_expert_count, global_expert_count,
-                send_models, receive_models, gib, local_input_buf)
+                send_models, receive_models, keep_models, gib, local_input_buf)
         layer=getattr(magi_runtime,'layer')
         ctx.moe_args = fwd_batch_size, inp.shape[0], num_expert, world_size ,layer
         ctx.save_for_backward(*variables)
@@ -113,7 +112,7 @@ class MoEForward(Function):
     @staticmethod
     def backward(ctx, grad_out):
         (pos_s, pos_g, local_expert_count, global_expert_count,
-                send_models, receive_models, gib, local_input_buf) = ctx.saved_tensors
+                send_models, receive_models, keep_models, gib, local_input_buf) = ctx.saved_tensors
         (fwd_batch_size, inp_batch_size, num_expert, world_size ,layer) = ctx.moe_args
         
         magi_expert=ctx.magi_runtime.magi_expert
@@ -170,15 +169,14 @@ class MoEForward(Function):
                 local_expert_count, global_expert_count,
                 send_models,
                 receive_models,
+                keep_models,
                 pos_s.shape[0], fwd_batch_size,
                 world_size,
                 _expert_backward,
-                is_magi_expert_exist_fn,
-                is_global_magi_expert_exist_fn,
                 collect_fn,
                 set_grad_fn)
         grad_in = _local_gather(grad_in_buf, pos_s, inp_batch_size)
-        return (None, None, grad_in, None, None, None, None, None, None, None, None, None, None, None)
+        return (None, None, grad_in, None, None, None, None, None, None, None, None, None, None, None, None)
 
 
 policy_fn = None
@@ -207,6 +205,7 @@ def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, exp
 
     send_models=magi_runtime.get_send_models()
     receive_models=magi_runtime.get_receive_models()
+    keep_models=magi_runtime.get_keep_models()
     
     topk = 1
     if len(gate.shape) == 2:
@@ -215,5 +214,5 @@ def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, exp
 
     return MoEForward.apply(expert_fn, experts, inp,
             torch.div(pos, topk, rounding_mode='floor'), pos,
-            local_expert_count, global_expert_count, send_models, receive_models,
+            local_expert_count, global_expert_count, send_models, receive_models,keep_models,
             fwd_batch_size, out_batch_size, n_expert, world_size,magi_runtime)

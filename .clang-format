@@ -1,0 +1,2 @@
+BasedOnStyle: LLVM  # 或选择其他基础样式
+ColumnLimit: 0  

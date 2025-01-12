@@ -6,8 +6,8 @@
 // global_exchange
 #ifdef FMOE_USE_NCCL
 
-#if defined(TORCH_VERSION_MAJOR) &&                                            \
-    (TORCH_VERSION_MAJOR > 1 ||                                                \
+#if defined(TORCH_VERSION_MAJOR) && \
+    (TORCH_VERSION_MAJOR > 1 ||     \
      (TORCH_VERSION_MAJOR == 1 && TORCH_VERSION_MINOR >= 13))
 #include <torch/csrc/distributed/c10d/ProcessGroup.hpp>
 #include <torch/csrc/distributed/c10d/ProcessGroupNCCL.hpp>
@@ -63,18 +63,17 @@ std::vector<torch::Tensor> _swipe_once(torch::Tensor gate_idx,
 std::vector<torch::Tensor> _smart_sch_forward(
     torch::Tensor input_buf, torch::Tensor local_expert_count,
     torch::Tensor global_expert_count, torch::Tensor send_models,
-    torch::Tensor receive_models, long global_batch_size, long expert_size,
-    long n_workers, bool magi_profile_flag, py::function forward_fn,
+    torch::Tensor receive_models, torch::Tensor keep_models,
+    long global_batch_size, long expert_size, long n_workers,
+    bool magi_profile_flag, py::function forward_fn,
     py::function registe_magi_expert_fn, py::function push_magi_expert_fn,
-    py::function is_magi_expert_exist_fn, py::function record_layer_time_fn);
+    py::function record_layer_time_fn);
 torch::Tensor
 _smart_sch_backward(torch::Tensor grad_out, torch::Tensor local_expert_count,
                     torch::Tensor global_expert_count,
-                    torch::Tensor send_models, torch::Tensor receive_models,
+                    torch::Tensor send_models, torch::Tensor receive_models, torch::Tensor keep_models,
                     long buf_batch_size, long global_batch_size, long n_workers,
                     py::function backward_fn,
-                    py::function is_magi_expert_exist_fn,
-                    py::function is_global_magi_expert_exist_fn,
                     py::function collect_fn, py::function set_grad_fn);
 void _reduce_grad(torch::Tensor t, long expert_size);
 

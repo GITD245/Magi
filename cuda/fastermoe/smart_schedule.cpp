@@ -64,11 +64,10 @@ void _reduce_grad(torch::Tensor t, long expert_size) {
 std::vector<torch::Tensor> _smart_sch_forward(
     torch::Tensor input_buf, // fwd_batch_size*1024
     torch::Tensor local_expert_count, torch::Tensor global_expert_count,
-    torch::Tensor send_models, torch::Tensor receive_models,
-    long global_batch_size, long expert_size, long n_workers,
-    bool magi_profile_flag, py::function forward_fn,
+    torch::Tensor send_models, torch::Tensor receive_models, torch::Tensor keep_models,
+    long global_batch_size, long expert_size, long n_workers, bool magi_profile_flag, py::function forward_fn,
     py::function registe_magi_expert_fn, py::function push_magi_expert_fn,
-    py::function is_magi_expert_exist_fn, py::function record_layer_time_fn) {
+    py::function record_layer_time_fn) {
   if (pipeline_gran == -1) {
     char *p = getenv("FMOE_FASTER_GROUP_SIZE");
     if (p) {
@@ -83,7 +82,7 @@ std::vector<torch::Tensor> _smart_sch_forward(
   int rank;
   NCCL_SAFE_CALL(ncclCommUserRank(smgr->ncclcomm, &rank));
 
-  const auto num_expert = local_expert_count.size(0) / n_workers;
+  const auto num_experts = local_expert_count.size(0) / n_workers;
   const auto d_model = input_buf.size(1);
 
   // TODO: maybe empty is faster
@@ -95,11 +94,11 @@ std::vector<torch::Tensor> _smart_sch_forward(
   std::vector<torch::Tensor> receive_params;
   auto send_models_ = send_models.data_ptr<bool>();
   auto receive_models_ = receive_models.data_ptr<bool>();
-  for (long i = 0; i < num_expert * n_workers;
+  for (long i = 0; i < num_experts * n_workers;
        ++i) { // get shadow_expert to params
     if (send_models_[i]) {
       torch::Tensor t = input_buf.new_empty({expert_size});
-      if (i / num_expert == rank) {
+      if (i / num_experts == rank) {
         // send expert param buffer
         registe_magi_expert_fn(t, i, 1);
         send_params.push_back(t);
@@ -118,7 +117,7 @@ std::vector<torch::Tensor> _smart_sch_forward(
       "fmoe_cuda_smart_sch_forward", ([&] {
         fmoe_cuda_fused_forward_impl(
             forward_fn, record_layer_time_fn, push_magi_expert_fn,
-            is_magi_expert_exist_fn, input_buf.device(),
+            input_buf.device(),
 
             send_params, receive_params,
 
@@ -131,8 +130,9 @@ std::vector<torch::Tensor> _smart_sch_forward(
             global_expert_count.data_ptr<long>(),
 
             send_models.data_ptr<bool>(), receive_models.data_ptr<bool>(),
+            keep_models.data_ptr<int>(),
 
-            d_model, num_expert, rank, n_workers, expert_size, pipeline_gran,
+            d_model, num_experts, rank, n_workers, expert_size, pipeline_gran,
             magi_profile_flag, smgr);
       }));
   return {output_buf, global_input_buf};
@@ -141,13 +141,11 @@ std::vector<torch::Tensor> _smart_sch_forward(
 torch::Tensor
 _smart_sch_backward(torch::Tensor grad_out, torch::Tensor local_expert_count,
                     torch::Tensor global_expert_count,
-                    torch::Tensor send_models, torch::Tensor receive_models,
+                    torch::Tensor send_models, torch::Tensor receive_models, torch::Tensor keep_models,
                     long buf_batch_size, long global_batch_size, long n_workers,
                     py::function backward_fn,
-                    py::function is_magi_expert_exist_fn,
-                    py::function is_global_magi_expert_exist_fn,
                     py::function collect_fn, py::function set_grad_fn) {
-  const auto num_expert = local_expert_count.size(0) / n_workers;
+  const auto num_experts = local_expert_count.size(0) / n_workers;
   auto smgr = getCudaStreamManager(grad_out.device().index());
   int rank;
   ncclCommUserRank(smgr->ncclcomm, &rank);
@@ -159,16 +157,18 @@ _smart_sch_backward(torch::Tensor grad_out, torch::Tensor local_expert_count,
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(
       grad_out.scalar_type(), "fmoe_cuda_smartsch_backward", ([&] {
         fmoe_cuda_fused_backward_impl(
-            backward_fn, is_magi_expert_exist_fn,
-            is_global_magi_expert_exist_fn, collect_fn, set_grad_fn,
+            backward_fn, collect_fn, set_grad_fn,
             grad_out.device(),
 
             grad_out.data_ptr<scalar_t>(), global_grad_out.data_ptr<scalar_t>(),
             global_grad_in.data_ptr<scalar_t>(), grad_in.data_ptr<scalar_t>(),
 
             local_expert_count.data_ptr<long>(),
-            global_expert_count.data_ptr<long>(), send_models.data_ptr<bool>(),
-            receive_models.data_ptr<bool>(), d_model, num_expert, rank,
+            global_expert_count.data_ptr<long>(),
+            send_models.data_ptr<bool>(),
+            receive_models.data_ptr<bool>(),
+            keep_models.data_ptr<int>(),
+            d_model, num_experts, rank,
             n_workers, pipeline_gran, smgr);
       }));
   return grad_in;

@@ -16,3 +16,4 @@ dist
 *.so
 .cache
 compile_commands.json
+compile_commands.event.json
