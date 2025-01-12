@@ -129,11 +129,11 @@ class MoEForward(Function):
         # def stash_fn(store_idx, expert_idx):
         #     expert_utils.stash_expert_params(experts, ctx.shadows[store_idx], expert_idx)
 
-        def is_magi_expert_exist_fn(flag_buf,rank_idx,expert_idx):
-            ctx.magi_runtime.is_magi_expert_exist(flag_buf,rank_idx,expert_idx,layer=layer)
+        # def is_magi_expert_exist_fn(flag_buf,rank_idx,expert_idx):
+        #     ctx.magi_runtime.is_magi_expert_exist(flag_buf,rank_idx,expert_idx,layer=layer)
         
-        def is_global_magi_expert_exist_fn(flag_buf,expert_idx):
-            ctx.magi_runtime.is_global_magi_expert_exist(flag_buf,expert_idx,layer=layer)
+        # def is_global_magi_expert_exist_fn(flag_buf,expert_idx):
+        #     ctx.magi_runtime.is_global_magi_expert_exist(flag_buf,expert_idx,layer=layer)
         
         # pop_fn = lambda idx: expert_utils.pop_expert_params(experts, idx)
         # pop_fn = lambda global_expert_idx: expert_utils.pop_expert_params(experts[global_expert_idx])

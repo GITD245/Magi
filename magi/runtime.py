@@ -9,7 +9,7 @@ from magi import policy
 class magi_runtime():
     def __init__(self,args,window_size=10):
 
-        self.model_keep_time=4
+        self.model_keep_time=10
         self.policy_interval=5
         
         self.d_model = args.hidden_size
@@ -90,26 +90,26 @@ class magi_runtime():
     def get_keep_models(self,layer=-1):
         if layer==-1:
             layer=self.layer
-        return self.global_pl_keep[self.rank][layer]
+        return torch.cat(self.global_pl_keep,dim=1)[layer].cpu()
     
-    def is_magi_expert_exist(self,flag_buf,rank_idx,expert_idx,layer=-1):
-        if layer==-1:
-            layer=self.layer
-        if self.global_pl_keep[rank_idx][layer][expert_idx]>0:
-            flag_buf[0]=True
-        else:
-            flag_buf[0]=False
+    # def is_magi_expert_exist(self,flag_buf,rank_idx,expert_idx,layer=-1):
+    #     if layer==-1:
+    #         layer=self.layer
+    #     if self.global_pl_keep[rank_idx][layer][expert_idx]>0:
+    #         flag_buf[0]=True
+    #     else:
+    #         flag_buf[0]=False
     
-    def is_global_magi_expert_exist(self,flag_buf,expert_idx,layer=-1):
-        if layer==-1:
-            layer=self.layer
-        cnt=0
-        for rank_idx in range(self.world_size):
-            cnt+=self.global_pl_keep[rank_idx][layer][expert_idx]
-        if cnt>0:
-            flag_buf[0]=True
-        else:
-            flag_buf[0]=False
+    # def is_global_magi_expert_exist(self,flag_buf,expert_idx,layer=-1):
+    #     if layer==-1:
+    #         layer=self.layer
+    #     cnt=0
+    #     for rank_idx in range(self.world_size):
+    #         cnt+=self.global_pl_keep[rank_idx][layer][expert_idx]
+    #     if cnt>0:
+    #         flag_buf[0]=True
+    #     else:
+    #         flag_buf[0]=False
         
     def _init_send_receive_models(self):
         self.pl_send=torch.zeros(self.num_layers,self.world_size*self.num_experts, dtype=torch.bool)
