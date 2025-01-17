@@ -71,5 +71,5 @@ class magi_expert:
                     self.magi_expert_dic[(layer,expert_idx)]-=1
         del self.magi_expert_dic[(layer,global_expert_idx)]
 
-        log.profile(f'rank {self.rank} del expert {global_expert_idx} (origin on rank {global_expert_idx//self.num_experts}) on layer {layer}')
+        log.send_del_log(f'rank {self.rank} del expert {global_expert_idx} (origin on rank {global_expert_idx//self.num_experts}) on layer {layer}')
 

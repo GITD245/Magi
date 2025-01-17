@@ -38,7 +38,6 @@ class magi_runtime():
         self.pl_send=torch.zeros(self.num_layers,self.world_size*self.num_experts, dtype=torch.bool)
         # [i*self.world_size+rank] means the expert_idx i shoud be recived from which rank
         self.pl_receive=torch.zeros(self.num_layers,self.world_size*self.num_experts*self.world_size, dtype=torch.bool)
-        # MAGI_TODO 优化is_magi_expert_exist_fn
         self.global_pl_keep=[torch.zeros(self.num_layers, self.world_size*self.num_experts, dtype=torch.int,device=torch.cuda.current_device()).contiguous() for _ in range(self.world_size)]
 
         self.local_token_deque=deque(maxlen=self.window_size)
@@ -86,7 +85,6 @@ class magi_runtime():
             layer=self.layer
         return self.pl_receive[layer]
     
-    # MAGI_TODO
     def get_keep_models(self,layer=-1):
         if layer==-1:
             layer=self.layer
@@ -112,12 +110,12 @@ class magi_runtime():
     #         flag_buf[0]=False
         
     def _init_send_receive_models(self):
-        self.pl_send=torch.zeros(self.num_layers,self.world_size*self.num_experts, dtype=torch.bool)
-        self.pl_receive=torch.zeros(self.num_layers,self.world_size*self.num_experts*self.world_size, dtype=torch.bool)
+        self.pl_send.zero_()
+        self.pl_receive.zero_()
 
-    def _receive_or_not(self,layer_idx,expert_idx):
+    def _receive_or_not(self,layer_idx,expert_idx,rank_idx):
         # should this rank receive this expert
-        return self.pl_send[layer_idx][expert_idx] and self.pl_receive[layer_idx][expert_idx*self.world_size+self.rank]
+        return self.pl_send[layer_idx][expert_idx] and self.pl_receive[layer_idx][expert_idx*self.world_size+rank_idx]
 
     def _lg_token_to_or_token(self,layer=0,itr=0):
         origin_token=dict()
@@ -133,7 +131,7 @@ class magi_runtime():
       
         return origin_token,recive_token
     
-    def _update_keep_models(self):
+    def _cnt_down_keep_models(self):
         for layer_idx in range(self.num_layers):
             for expert_idx in range(self.world_size*self.num_experts):
                 # cnt down keep models
@@ -143,11 +141,29 @@ class magi_runtime():
                         self.magi_expert.del_magi_expert(layer_idx,expert_idx)
                     self.global_pl_keep[self.rank][layer_idx][expert_idx]-=1
                 # record send receive models in keep models
-                if self._receive_or_not(layer_idx,expert_idx):
+                if self._receive_or_not(layer_idx,expert_idx,self.rank):
                     #MAGI_TODO: change keep time?
                     # self rank should not keep self magi_expert
                     if expert_idx//self.num_experts!=self.rank:
                         self.global_pl_keep[self.rank][layer_idx][expert_idx]+=self.model_keep_time
+        self._all_gather_keep_models()
+
+    # def _cnt_down_keep_models(self):
+    #     for layer_idx in range(self.num_layers):
+    #         for expert_idx in range(self.world_size*self.num_experts):
+    #             for rank_idx in range(self.world_size):
+    #                 # cnt down keep models
+    #                 if self.global_pl_keep[rank_idx][layer_idx][expert_idx]>0:
+    #                     if self.rank==rank_idx and self.global_pl_keep[self.rank][layer_idx][expert_idx]==1:
+    #                         # del model
+    #                         self.magi_expert.del_magi_expert(layer_idx,expert_idx)
+    #                     self.global_pl_keep[rank_idx][layer_idx][expert_idx]-=1
+    #                 # record send receive models in keep models
+    #                 if self._receive_or_not(layer_idx,expert_idx,rank_idx):
+    #                     #MAGI_TODO: change keep time?
+    #                     # self rank should not keep self magi_expert
+    #                     if expert_idx//self.num_experts!=rank_idx:
+    #                         self.global_pl_keep[rank_idx][layer_idx][expert_idx]+=self.model_keep_time
 
 
     def _all_gather_keep_models(self):
@@ -164,8 +180,6 @@ class magi_runtime():
             self.layer+=1
             
     def next_itr(self):
-        if self.eval:
-            print('into eval')
         self.local_token_deque.appendleft([value for value in self.pl_local_token_count])
         self.global_token_deque.appendleft([value for value in self.pl_global_token_count])
         log.print_time(self.pl_record_time)
@@ -174,15 +188,12 @@ class magi_runtime():
         # MAGI_TODO: Reduce or_token to rank0 ?
 
         # update keep_models
-        self._update_keep_models()
-        # allgather keep models
-        self._all_gather_keep_models()
+        self._cnt_down_keep_models()
         
         if self.itr%self.policy_interval==0:
-            # using policy to get next itd send receive
             self.pl_send,self.pl_receive,self.global_pl_keep=policy.using_policy(self)
             # log._print(f'rank:{self.rank} pl_send:{self.pl_send} pl_receive:{self.pl_receive} global_pl_keep:{self.global_pl_keep}')
-        else:
+        elif self.itr%self.policy_interval==1:
             self._init_send_receive_models()
             
         self.itr+=1

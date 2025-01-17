@@ -1,6 +1,8 @@
 PRINT_TIME=1
 PRINT_TOKEN=0
 PRINT_RANK_0=0
+PRINT_SEND_DEL=0
+
 SAVE_GLOBAL_TOKEN_LOG=0
 
 RANK=None
@@ -51,9 +53,13 @@ def profile(msg):
     if MAGI_PROFILER:
         _print(msg)
 
+def send_del_log(msg):
+    if PRINT_SEND_DEL:
+        _print(msg)
+
 def _print(msg):
     if PRINT_RANK_0:
         if RANK==0:
-            print(f"\n{msg}\n")
+            print(f"\n{msg}")
     else:
         print(msg)

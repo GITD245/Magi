@@ -20,7 +20,7 @@ def _check_send_receive_keep(num_layers,model_keep_time,pl_send,pl_receive,globa
         for expert_idx in range(WORLD_SIZE*NUM_EXPERTS):
             for rank_idx in range(WORLD_SIZE):
                 if _receive_or_not(pl_send,pl_receive,layer_idx,expert_idx,rank_idx):
-                    # same rank should not send and receive
+                    # same rank should not send and receive self expert
                     if expert_idx//NUM_EXPERTS==rank_idx:
                         pl_receive[layer_idx][expert_idx*WORLD_SIZE+rank_idx]=False
                     # allready have this expert, dont need to receive
@@ -29,9 +29,9 @@ def _check_send_receive_keep(num_layers,model_keep_time,pl_send,pl_receive,globa
                         # MAGI_TODO:change keep time?
                         global_pl_keep[rank_idx][layer_idx][expert_idx]+=model_keep_time
                     else:
-                        log.profile(f'rank {rank_idx} receive expert {expert_idx} (origin on rank {expert_idx//NUM_EXPERTS}) on layer {layer_idx}')
+                        log.send_del_log(f'rank {rank_idx} receive expert {expert_idx} (origin on rank {expert_idx//NUM_EXPERTS}) on layer {layer_idx}')
             # no receive expert, dont need to send
-            if not pl_send[layer_idx][expert_idx] and not pl_receive[layer_idx][expert_idx*WORLD_SIZE:expert_idx*WORLD_SIZE+WORLD_SIZE].any():
+            if pl_send[layer_idx][expert_idx] and not pl_receive[layer_idx][expert_idx*WORLD_SIZE:expert_idx*WORLD_SIZE+WORLD_SIZE].any():
                 pl_send[layer_idx][expert_idx]=False
 
 def _update_send_receive_keep_on_all_rank(pl_send,pl_receive,global_pl_keep):
@@ -64,6 +64,7 @@ def policy(runtime,pl_send,pl_receive):
     pass
 
 def using_policy(runtime):
+    # MAGI_TODO
     pl_send=torch.zeros(runtime.num_layers,WORLD_SIZE*NUM_EXPERTS, dtype=torch.bool)
     pl_receive=torch.zeros(runtime.num_layers,WORLD_SIZE*NUM_EXPERTS*WORLD_SIZE, dtype=torch.bool)
 
