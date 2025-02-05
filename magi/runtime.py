@@ -46,7 +46,7 @@ class magi_runtime():
         self.eval=False
         self.itr=1
         self.layer=0
-        policy.init_policy(self.world_size,self.num_experts)
+        policy.init_policy(self.world_size,self.num_experts,self.num_layers)
         log.init_log(args.rank,args.magi_profile_flag)
         self.magi_expert=magi_experts.magi_expert(self)
 
@@ -167,7 +167,6 @@ class magi_runtime():
 
 
     def _all_gather_keep_models(self):
-        # MAGI_TODO
         send_tensor = self.global_pl_keep[self.rank].contiguous()
         receive_tensor_list=[torch.zeros(self.num_layers,self.world_size*self.num_experts, dtype=torch.int,device=torch.cuda.current_device()).contiguous() for _ in range(self.world_size)]
         
@@ -192,7 +191,7 @@ class magi_runtime():
         
         if self.itr%self.policy_interval==0:
             self.pl_send,self.pl_receive,self.global_pl_keep=policy.using_policy(self)
-            # log._print(f'rank:{self.rank} pl_send:{self.pl_send} pl_receive:{self.pl_receive} global_pl_keep:{self.global_pl_keep}')
+            log.print_policy_tensor(f'rank:{self.rank} pl_send:{self.pl_send} pl_receive:{self.pl_receive} global_pl_keep:{self.global_pl_keep}')
         elif self.itr%self.policy_interval==1:
             self._init_send_receive_models()
             
