@@ -1,4 +1,5 @@
 import torch
+import time
 from collections import deque
 import torch.distributed as dist
 from magi import experts as magi_experts
@@ -38,7 +39,7 @@ class magi_runtime():
         self.pl_send=torch.zeros(self.num_layers,self.world_size*self.num_experts, dtype=torch.bool)
         # [i*self.world_size+rank] means the expert_idx i shoud be recived from which rank
         self.pl_receive=torch.zeros(self.num_layers,self.world_size*self.num_experts*self.world_size, dtype=torch.bool)
-        self.global_pl_keep=[torch.zeros(self.num_layers, self.world_size*self.num_experts, dtype=torch.int,device=torch.cuda.current_device()).contiguous() for _ in range(self.world_size)]
+        self.global_pl_keep=[torch.zeros(self.num_layers, self.world_size*self.num_experts, dtype=torch.int) for _ in range(self.world_size)]
 
         self.local_token_deque=deque(maxlen=self.window_size)
         self.global_token_deque=deque(maxlen=self.window_size)
@@ -46,6 +47,7 @@ class magi_runtime():
         self.eval=False
         self.itr=1
         self.layer=0
+        
         policy.init_policy(self.world_size,self.num_experts,self.num_layers)
         log.init_log(args.rank,args.magi_profile_flag)
         self.magi_expert=magi_experts.magi_expert(self)
@@ -88,7 +90,7 @@ class magi_runtime():
     def get_keep_models(self,layer=-1):
         if layer==-1:
             layer=self.layer
-        return torch.cat(self.global_pl_keep,dim=1)[layer].cpu()
+        return torch.cat(self.global_pl_keep,dim=1)[layer]
     
     # def is_magi_expert_exist(self,flag_buf,rank_idx,expert_idx,layer=-1):
     #     if layer==-1:
@@ -167,11 +169,12 @@ class magi_runtime():
 
 
     def _all_gather_keep_models(self):
-        send_tensor = self.global_pl_keep[self.rank].contiguous()
+        send_tensor = self.global_pl_keep[self.rank].cuda(torch.cuda.current_device()).contiguous()
         receive_tensor_list=[torch.zeros(self.num_layers,self.world_size*self.num_experts, dtype=torch.int,device=torch.cuda.current_device()).contiguous() for _ in range(self.world_size)]
         
         dist.all_gather(receive_tensor_list,send_tensor)
-        self.global_pl_keep=receive_tensor_list
+
+        self.global_pl_keep=[tensor.cpu() for tensor in receive_tensor_list]
 
     def next_layer(self):
         # log._print(f'runtime_layer:{self.layer}')

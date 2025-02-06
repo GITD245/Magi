@@ -20,6 +20,7 @@ class MOELinear(Function):
             global_input_buf, fwd_expert_count, weight, bias
         )
         variables = (global_input_buf, fwd_expert_count, weight, bias)
+        #bug_to_fix: some time ctx.save_for_backward will be very slow
         ctx.save_for_backward(*variables)
         return global_output_buf
 

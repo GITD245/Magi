@@ -1,5 +1,6 @@
 import torch
 import torch.distributed as dist
+import time
 from magi import log
 
 WORLD_SIZE=0
@@ -38,7 +39,7 @@ def _check_send_receive_keep(model_keep_time,pl_send,pl_receive,global_pl_keep):
                 pl_send[layer_idx][expert_idx]=False
 
 def _update_send_receive_keep_on_all_rank(pl_send,pl_receive,global_pl_keep):
-    # broadcast_tensor=torch.cat(global_pl_keep,dim=1)
+    # broadcast_tensor=torch.cat(global_pl_keep,dim=1).cuda(torch.cuda.current_device())
     # broadcast_tensor=torch.cat([broadcast_tensor,pl_send,pl_receive],dim=1)
 
     # dist.broadcast(broadcast_tensor, src=0)
@@ -47,11 +48,9 @@ def _update_send_receive_keep_on_all_rank(pl_send,pl_receive,global_pl_keep):
     # pl_send=broadcast_tensor[:,WORLD_SIZE*NUM_EXPERTS*WORLD_SIZE:WORLD_SIZE*NUM_EXPERTS*WORLD_SIZE+WORLD_SIZE*NUM_EXPERTS].to(torch.bool).cpu()
     # pl_receive=broadcast_tensor[:,WORLD_SIZE*NUM_EXPERTS*WORLD_SIZE+WORLD_SIZE*NUM_EXPERTS:].to(torch.bool).cpu()
 
-    # return pl_send.cpu(),pl_receive.cpu(),list(torch.split(keep_tensor,WORLD_SIZE*NUM_EXPERTS,dim=1))
+    # return pl_send.cpu(),pl_receive.cpu(),list(torch.split(keep_tensor.cpu(),WORLD_SIZE*NUM_EXPERTS,dim=1))
 
-    keep_tensor=torch.cat(global_pl_keep,dim=1)
-    pl_send=pl_send.cuda(torch.cuda.current_device())
-    pl_receive=pl_receive.cuda(torch.cuda.current_device())
+    keep_tensor=torch.cat(global_pl_keep,dim=1).cuda(torch.cuda.current_device())
     
     dist.broadcast(pl_send, src=0)
     dist.broadcast(pl_receive, src=0)
@@ -60,19 +59,22 @@ def _update_send_receive_keep_on_all_rank(pl_send,pl_receive,global_pl_keep):
     pl_send=pl_send.cpu()
     pl_receive=pl_receive.cpu()
 
-    return pl_send,pl_receive,list(torch.split(keep_tensor,WORLD_SIZE*NUM_EXPERTS,dim=1))
+    return pl_send,pl_receive,list(torch.split(keep_tensor.cpu(),WORLD_SIZE*NUM_EXPERTS,dim=1))
 
-def _set_boradcast_expert(layer,pl_send,pl_receive,expert_idx):
-    pl_send[layer][expert_idx]=True
+def _set_single_expert(layer,pl_send,pl_receive,send_expert_idx,receive_expert_idx_list,global_pl_keep):
+    pl_send[layer]
+
+def _set_boradcast_expert(layer,pl_send,pl_receive,boradcast_expert_idx,global_pl_keep):
+    pl_send[layer][boradcast_expert_idx]=True
     for rank_idx in range(WORLD_SIZE):
-        if expert_idx//NUM_EXPERTS!=rank_idx:
-            pl_receive[layer][expert_idx*WORLD_SIZE+rank_idx]=True
+        if boradcast_expert_idx//NUM_EXPERTS!=rank_idx:
+            pl_receive[layer][boradcast_expert_idx*WORLD_SIZE+rank_idx]=True
 
 def policy(runtime,pl_send,pl_receive):
     # test
     for layer in range(NUM_LAYERS):
-        for expert_idx in range(WORLD_SIZE*NUM_EXPERTS):
-            _set_boradcast_expert(layer,pl_send,pl_receive,expert_idx)
+        for expert_idx in range(WORLD_SIZE*NUM_EXPERTS//2):
+            _set_boradcast_expert(layer,pl_send,pl_receive,expert_idx,runtime.global_pl_keep)
 
     pass
 
