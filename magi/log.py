@@ -1,6 +1,7 @@
+PRINT_RANK=-1
+
 PRINT_TIME=1
 PRINT_TOKEN=0
-PRINT_RANK_0=0
 PRINT_SEND_DEL=0
 PRINT_POLICY_TENSOR=0
 
@@ -63,8 +64,7 @@ def send_del_log(msg):
         _print(msg)
 
 def _print(msg):
-    if PRINT_RANK_0:
-        if RANK==0:
-            print(f"\n{msg}")
-    else:
+    if PRINT_RANK==-1:
         print(msg)
+    elif PRINT_RANK==RANK:
+        print(f"\n{msg}")

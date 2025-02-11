@@ -6,6 +6,8 @@ computation.
 
 import torch
 from torch.autograd import Function
+import torch.distributed as dist
+import time
 import fmoe_cuda
 from .utils import get_torch_default_comm
 
@@ -39,10 +41,14 @@ def count_by_gate(gate, num_expert, world_size, require_pos=True):
             )
         else:
             global_expert_count = local_expert_count
-        
         from megatron import get_args  # type: ignore
+
+        all_gather_list=[global_expert_count.new_empty(global_expert_count.shape) for _ in range(dist.get_world_size())]
+        dist.all_gather(all_gather_list, global_expert_count)
+
         get_args().magi_runtime.record_local_expert_count(local_expert_count)
         get_args().magi_runtime.record_global_expert_count(global_expert_count)
+        get_args().magi_runtime.record_all_rank_global_expert_count(torch.cat(all_gather_list,dim=0))
 
         if not require_pos:
             pos = None

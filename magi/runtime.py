@@ -8,9 +8,10 @@ from magi import log
 from magi import policy
 
 class magi_runtime():
-    def __init__(self,args,window_size=10):
+    def __init__(self,args):
 
-        self.model_keep_time=10
+        self.model_keep_time=11
+        self.window_size=10
         self.policy_interval=5
         
         self.d_model = args.hidden_size
@@ -18,7 +19,6 @@ class magi_runtime():
         self.num_experts = args.fmoe_num_experts
         self.world_size = args.data_parallel_size
         self.rank=args.rank
-        self.window_size = window_size
         self.total_input_size=args.seq_length*args.micro_batch_size*args.top_k*args.data_parallel_size
         self.magi_profile_flag=args.magi_profile_flag
         self.gate=args.balance_strategy
@@ -26,6 +26,7 @@ class magi_runtime():
         # pl means per layer
         self.pl_local_token_count=[None] * self.num_layers
         self.pl_global_token_count=[None] * self.num_layers
+        self.pl_all_rank_global_token_count=[None] * self.num_layers
         self.pl_record_time={'stime':[0]* self.num_layers,
                                       'ctime':[0]* self.num_layers,
                                       'ctime_wait':[0]* self.num_layers,
@@ -43,12 +44,13 @@ class magi_runtime():
 
         self.local_token_deque=deque(maxlen=self.window_size)
         self.global_token_deque=deque(maxlen=self.window_size)
+        self.all_rank_global_token_deque=deque(maxlen=self.window_size)
 
         self.eval=False
         self.itr=1
         self.layer=0
         
-        policy.init_policy(self.world_size,self.num_experts,self.num_layers)
+        policy.init_policy(self.world_size,self.num_experts,self.num_layers,self.model_keep_time)
         log.init_log(args.rank,args.magi_profile_flag)
         self.magi_expert=magi_experts.magi_expert(self)
 
@@ -64,6 +66,10 @@ class magi_runtime():
         if not self.eval:
             self.pl_global_token_count[self.layer]=global_expert_count
             log.save_global_token_log(self.gate,self.layer,self.itr,global_expert_count)
+    
+    def record_all_rank_global_expert_count(self,pl_all_rank_global_token_count):
+        if not self.eval:
+            self.pl_all_rank_global_token_count[self.layer]=pl_all_rank_global_token_count
 
     def record_layer_time(self,stime,ctime,ctime_wait,rtime,rtime_wait,magi_stime,magi_ctime,magi_ctime_wait,keep_ctime):
         if not self.eval:
@@ -110,7 +116,27 @@ class magi_runtime():
     #         flag_buf[0]=True
     #     else:
     #         flag_buf[0]=False
+
+    def lg_token_to_or_token(self,layer=0,itr_cnt=1):
+        origin_token=list()
+        receive_token=list()
+        all_rank_global_token_count_tensor=self.all_rank_global_token_deque[0][layer]
         
+        for i in range(1,min(itr_cnt,len(self.all_rank_global_token_deque))):
+            all_rank_global_token_count_tensor=torch.add(all_rank_global_token_count_tensor,self.all_rank_global_token_deque[i][layer])
+    
+        for expert_idx in range(self.world_size*self.num_experts):
+            rank=expert_idx//self.num_experts
+            global_token_count=all_rank_global_token_count_tensor[rank*self.num_experts*self.world_size:(rank+1)*self.num_experts*self.world_size]
+            # token needn't to be sent to other workers
+            origin_token.append(global_token_count[rank*self.num_experts+expert_idx%self.num_experts].item())
+            # token need to be recived from other workers
+            receive_token.append(sum(global_token_count[(expert_idx%self.num_experts)::self.num_experts]).item()-origin_token[-1])
+        
+        log.print_token(self.itr,layer,receive_token,origin_token)
+      
+        return origin_token,receive_token
+    
     def _init_send_receive_models(self):
         self.pl_send.zero_()
         self.pl_receive.zero_()
@@ -118,20 +144,6 @@ class magi_runtime():
     def _receive_or_not(self,layer_idx,expert_idx,rank_idx):
         # should this rank receive this expert
         return self.pl_send[layer_idx][expert_idx] and self.pl_receive[layer_idx][expert_idx*self.world_size+rank_idx]
-
-    def _lg_token_to_or_token(self,layer=0,itr=0):
-        origin_token=dict()
-        recive_token=dict()
-
-        for expert_idx in range(self.rank*self.num_experts,self.rank*self.num_experts+self.num_experts):
-            # token needn't to be sent to other workers
-            origin_token[expert_idx]=self.global_token_deque[itr][layer][self.rank*self.num_experts+expert_idx%self.num_experts].item()
-            # token need to be recived from other workers
-            recive_token[expert_idx]=sum(self.global_token_deque[itr][layer][(expert_idx%self.num_experts)::self.num_experts]).item()-origin_token[expert_idx]
-        
-        log.print_token(self.itr,layer,recive_token,origin_token)
-      
-        return origin_token,recive_token
     
     def _cnt_down_keep_models(self):
         for layer_idx in range(self.num_layers):
@@ -182,16 +194,16 @@ class magi_runtime():
             self.layer+=1
             
     def next_itr(self):
+        # MAGI_TODO: unused?
         self.local_token_deque.appendleft([value for value in self.pl_local_token_count])
         self.global_token_deque.appendleft([value for value in self.pl_global_token_count])
+        self.all_rank_global_token_deque.appendleft([value for value in self.pl_all_rank_global_token_count])
+        
         log.print_time(self.pl_record_time)
-
-        self._lg_token_to_or_token()
-        # MAGI_TODO: Reduce or_token to rank0 ?
 
         # update keep_models
         self._cnt_down_keep_models()
-        
+
         if self.itr%self.policy_interval==0:
             self.pl_send,self.pl_receive,self.global_pl_keep=policy.using_policy(self)
             log.print_policy_tensor(f'rank:{self.rank} pl_send:{self.pl_send} pl_receive:{self.pl_receive} global_pl_keep:{self.global_pl_keep}')
