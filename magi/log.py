@@ -55,10 +55,6 @@ def print_policy_tensor(msg):
     if PRINT_POLICY_TENSOR:
         _print(msg)
 
-def profile(msg):
-    if MAGI_PROFILER:
-        _print(msg)
-
 def send_del_log(msg):
     if PRINT_SEND_DEL:
         _print(msg)
@@ -67,4 +63,4 @@ def _print(msg):
     if PRINT_RANK==-1:
         print(msg)
     elif PRINT_RANK==RANK:
-        print(f"\n{msg}")
+        print(f"{msg}")

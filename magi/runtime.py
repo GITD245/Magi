@@ -10,9 +10,11 @@ from magi import policy
 class magi_runtime():
     def __init__(self,args):
 
-        self.model_keep_time=11
+        # policy_interval<model_keep_time<2*policy_interval
+        self.model_keep_time=12
         self.window_size=10
         self.policy_interval=5
+        self.proxy_expert_nums=args.num_layers*args.fmoe_num_experts*args.data_parallel_size//10
         
         self.d_model = args.hidden_size
         self.num_layers = args.num_layers
@@ -38,7 +40,7 @@ class magi_runtime():
                                       'keep_ctime':[0]* self.num_layers}
         
         self.pl_send=torch.zeros(self.num_layers,self.world_size*self.num_experts, dtype=torch.bool)
-        # [i*self.world_size+rank] means the expert_idx i shoud be recived from which rank
+        # [i*self.world_size+j] means rank j shoud receive expert i
         self.pl_receive=torch.zeros(self.num_layers,self.world_size*self.num_experts*self.world_size, dtype=torch.bool)
         self.global_pl_keep=[torch.zeros(self.num_layers, self.world_size*self.num_experts, dtype=torch.int) for _ in range(self.world_size)]
 
@@ -50,7 +52,7 @@ class magi_runtime():
         self.itr=1
         self.layer=0
         
-        policy.init_policy(self.world_size,self.num_experts,self.num_layers,self.model_keep_time)
+        policy.init_policy(self.world_size,self.num_experts,self.num_layers,self.model_keep_time,self.proxy_expert_nums)
         log.init_log(args.rank,args.magi_profile_flag)
         self.magi_expert=magi_experts.magi_expert(self)
 
@@ -97,6 +99,13 @@ class magi_runtime():
         if layer==-1:
             layer=self.layer
         return torch.cat(self.global_pl_keep,dim=1)[layer]
+    
+    def get_keep_model_nums(self,layer,expert_idx):
+        cnt=0
+        for rank_idx in range(self.world_size):
+            if self.global_pl_keep[rank_idx][layer][expert_idx]>0:
+                cnt+=1
+        return cnt
     
     # def is_magi_expert_exist(self,flag_buf,rank_idx,expert_idx,layer=-1):
     #     if layer==-1:
@@ -188,10 +197,12 @@ class magi_runtime():
 
         self.global_pl_keep=[tensor.cpu() for tensor in receive_tensor_list]
 
+    def reset_layer(self):
+        self.layer=0
+
     def next_layer(self):
         # log._print(f'runtime_layer:{self.layer}')
-        if not self.eval:
-            self.layer+=1
+        self.layer+=1
             
     def next_itr(self):
         # MAGI_TODO: unused?
