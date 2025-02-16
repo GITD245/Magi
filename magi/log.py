@@ -40,7 +40,7 @@ def print_time(per_itr_record_time,layer=-1):
                 magi_ctime_wait=per_itr_record_time['magi_ctime_wait'][layer]
                 keep_ctime=per_itr_record_time['keep_ctime'][layer]
 
-            _print(f"rank:{RANK} layer:{layer} stime:{stime:.2f} ctime_wait:{ctime_wait:.2f} ctime:{ctime:.2f} rtime:{rtime:.2f} magi_stime:{magi_stime:.2f} magi_ctime_wait:{magi_ctime_wait:.2f} magi_ctime:{magi_ctime:.2f} keep_ctime:{keep_ctime:.2f} total_time:{stime+ctime+ctime_wait+rtime+rtime_wait+magi_stime+magi_ctime+magi_ctime_wait+keep_ctime:.2f}")
+            _print(f"rank:{RANK} layer:{layer} stime:{stime:.2f} ctime_wait:{ctime_wait:.2f} ctime:{ctime:.2f} rtime:{rtime:.2f} magi_stime:{magi_stime:.2f} magi_ctime_wait:{magi_ctime_wait:.2f} magi_ctime:{magi_ctime:.2f} keep_ctime:{keep_ctime:.2f} total_time:{stime+ctime+rtime+magi_stime+magi_ctime+keep_ctime:.2f}")
 
 def save_global_token_log(gate,layer,itr,global_expert_count):
     if SAVE_GLOBAL_TOKEN_LOG:

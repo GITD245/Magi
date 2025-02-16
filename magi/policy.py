@@ -101,12 +101,13 @@ def policy(runtime,pl_send,pl_receive):
     receive_token=list()
     all_receive_token=list()
     for i in range(NUM_LAYERS):
+        # MAGI_TODO:change 10 to a variable
         _,receive_token=runtime.lg_token_to_or_token(i,10)
         all_receive_token.extend(receive_token)
     
     sorted_expert_idx = sorted(range(len(all_receive_token)), key=lambda k: all_receive_token[k], reverse=True)
     
-    for i in range(WORLD_SIZE*NUM_EXPERTS*NUM_LAYERS//2):
+    for i in range(WORLD_SIZE*NUM_EXPERTS*NUM_LAYERS//10):
         expert_idx=sorted_expert_idx[i]%(WORLD_SIZE*NUM_EXPERTS)
         layer=sorted_expert_idx[i]//(WORLD_SIZE*NUM_EXPERTS)
         _set_boradcast_expert(layer,expert_idx,pl_send,pl_receive,runtime.global_pl_keep)
