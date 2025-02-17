@@ -1,3 +1,4 @@
+#include "pybind11/pytypes.h"
 #include <iostream> // IWYU pragma: keep
 #include <torch/csrc/autograd/custom_function.h>
 #include <torch/extension.h>
@@ -72,9 +73,9 @@ torch::Tensor
 _smart_sch_backward(torch::Tensor grad_out, torch::Tensor local_expert_count,
                     torch::Tensor global_expert_count,
                     torch::Tensor send_models, torch::Tensor receive_models, torch::Tensor keep_models,
-                    long buf_batch_size, long global_batch_size, long n_workers,
+                    long buf_batch_size, long global_batch_size, long n_workers, bool magi_profile_flag,
                     py::function backward_fn,
-                    py::function collect_fn, py::function set_grad_fn);
+                    py::function collect_fn, py::function set_grad_fn, py::function record_layer_time_fn);
 void _reduce_grad(torch::Tensor t, long expert_size);
 
 PYBIND11_MODULE(TORCH_EXTENSION_NAME, m) {

@@ -3,6 +3,7 @@ The smart schedule proposed in FasterMoE.
 """
 import torch
 import torch.distributed as dist
+import time
 
 from torch.autograd.function import Function
 
@@ -46,6 +47,7 @@ class MoEForward(Function):
             nothing = lambda a: a
             x = x.data
 
+            # get real stored expert_idx from magi_expert
             if magi_flag:
                 expert_idx=magi_expert.get_magi_expert_idx(expert_idx)
                 
@@ -94,7 +96,7 @@ class MoEForward(Function):
                 _expert_forward,
                 magi_expert.registe_magi_expert,
                 magi_expert.push_magi_expert,
-                magi_runtime.record_layer_time)
+                magi_runtime.record_fowd_layer_time)
         
         out = _local_gather(local_output_buf, pos_g, out_batch_size,
                 maybe_overlap=False)
@@ -112,7 +114,7 @@ class MoEForward(Function):
     @staticmethod
     def backward(ctx, grad_out):
         (pos_s, pos_g, local_expert_count, global_expert_count,
-                send_models, receive_models, keep_models, gib, local_input_buf) = ctx.saved_tensors
+                send_models, receive_models, keep_models, _, local_input_buf) = ctx.saved_tensors
         (fwd_batch_size, inp_batch_size, num_expert, world_size ,layer) = ctx.moe_args
         
         magi_expert=ctx.magi_runtime.magi_expert
@@ -162,6 +164,8 @@ class MoEForward(Function):
             elif receive_or_keep_or_send==2:
                 expert_utils.set_grads(experts[global_expert_idx%num_expert], receive_grads[global_expert_idx]) 
 
+        def record_bawd_layer_time(time,ctime,ctime_wait,rtime,rtime_wait,magi_ctime,magi_reduce,keep_ctime,keep_reduce,set_gradients):
+            ctx.magi_runtime.record_bawd_layer_time(layer,time,ctime,ctime_wait,rtime,rtime_wait,magi_ctime,magi_reduce,keep_ctime,keep_reduce,set_gradients)
 
         grad_out_buf = _local_scatter(grad_out.contiguous(), pos_g)
         grad_in_buf = fmoe_native.smart_sch_backward(
@@ -172,17 +176,17 @@ class MoEForward(Function):
                 keep_models,
                 pos_s.shape[0], fwd_batch_size,
                 world_size,
+                ctx.magi_runtime.magi_profile_flag,
                 _expert_backward,
                 collect_fn,
-                set_grad_fn)
+                set_grad_fn,
+                record_bawd_layer_time)
         grad_in = _local_gather(grad_in_buf, pos_s, inp_batch_size)
         return (None, None, grad_in, None, None, None, None, None, None, None, None, None, None, None, None)
 
-
 policy_fn = None
 
-
-def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, experts=None,magi_runtime=None):
+def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, experts=None, magi_runtime=None):
     # TODO: Using multiple tensors as input is to be supported.
     assert(isinstance(inp, torch.Tensor))
     (

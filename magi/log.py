@@ -16,31 +16,48 @@ def init_log(rank,magi_profile_flag):
     RANK=rank
     MAGI_PROFILER=magi_profile_flag
 
-def print_time(per_itr_record_time,layer=-1):
+def print_time(per_itr_record_time,fowd=True,layer=-1):
     if MAGI_PROFILER:
         if PRINT_TIME:
-            if layer==-1:
-                stime=sum(per_itr_record_time['stime'])
-                ctime=sum(per_itr_record_time['ctime'])
-                ctime_wait=sum(per_itr_record_time['ctime_wait'])
-                rtime=sum(per_itr_record_time['rtime'])
-                rtime_wait=sum(per_itr_record_time['rtime_wait'])
-                magi_stime=sum(per_itr_record_time['magi_stime'])
-                magi_ctime=sum(per_itr_record_time['magi_ctime'])
-                magi_ctime_wait=sum(per_itr_record_time['magi_ctime_wait'])
-                keep_ctime=sum(per_itr_record_time['keep_ctime'])
-            else:
-                stime=per_itr_record_time['stime'][layer]
-                ctime=per_itr_record_time['ctime'][layer]
-                ctime_wait=per_itr_record_time['ctime_wait'][layer]
-                rtime=per_itr_record_time['rtime'][layer]
-                rtime_wait=per_itr_record_time['rtime_wait'][layer]
-                magi_stime=per_itr_record_time['magi_stime'][layer]
-                magi_ctime=per_itr_record_time['magi_ctime'][layer]
-                magi_ctime_wait=per_itr_record_time['magi_ctime_wait'][layer]
-                keep_ctime=per_itr_record_time['keep_ctime'][layer]
+            stime=sum(per_itr_record_time['stime']) if layer==-1 else per_itr_record_time['stime'][layer]
+            ctime=sum(per_itr_record_time['ctime']) if layer==-1 else per_itr_record_time['ctime'][layer]
+            ctime_wait=sum(per_itr_record_time['ctime_wait']) if layer==-1 else per_itr_record_time['ctime_wait'][layer]
+            rtime=sum(per_itr_record_time['rtime']) if layer==-1 else per_itr_record_time['rtime'][layer]
+            rtime_wait=sum(per_itr_record_time['rtime_wait']) if layer==-1 else per_itr_record_time['rtime_wait'][layer]
+            magi_ctime=sum(per_itr_record_time['magi_ctime']) if layer==-1 else per_itr_record_time['magi_ctime'][layer]
+            keep_ctime=sum(per_itr_record_time['keep_ctime']) if layer==-1 else per_itr_record_time['keep_ctime'][layer]
 
-            _print(f"rank:{RANK} layer:{layer} stime:{stime:.2f} ctime_wait:{ctime_wait:.2f} ctime:{ctime:.2f} rtime:{rtime:.2f} magi_stime:{magi_stime:.2f} magi_ctime_wait:{magi_ctime_wait:.2f} magi_ctime:{magi_ctime:.2f} keep_ctime:{keep_ctime:.2f} total_time:{stime+ctime+rtime+magi_stime+magi_ctime+keep_ctime:.2f}")
+            time_log_str=f" rank:{RANK}"
+            time_log_str+=f" layer all" if layer==-1 else f" layer:{layer}"
+            time_log_str+=f" s:{stime:6.2f} cw:{ctime_wait:6.2f} c:{ctime:6.2f} r:{rtime:6.2f}"
+
+            if fowd:
+                log_str="forward "
+                magi_stime=sum(per_itr_record_time['magi_stime']) if layer==-1 else per_itr_record_time['magi_stime'][layer]
+                magi_ctime_wait=sum(per_itr_record_time['magi_ctime_wait']) if layer==-1 else per_itr_record_time['magi_ctime_wait'][layer]
+                
+                magi_log_str=f" total:{stime+ctime+rtime+magi_stime+magi_ctime+keep_ctime:6.2f}"
+                magi_log_str+=f"  magi_s:{magi_stime:6.2f}"if magi_stime>10 else ""
+                magi_log_str+=f" magi_cw:{magi_ctime_wait:6.2f}"if magi_ctime_wait>1 else ""
+                magi_log_str+=f"  magi_c:{magi_ctime:6.2f}"if magi_ctime>10 else ""
+                magi_log_str+=f"  keep_c:{keep_ctime:6.2f}"if keep_ctime>10 else ""
+            else:
+                log_str="backward"
+                magi_reduce=sum(per_itr_record_time['magi_reduce']) if layer==-1 else per_itr_record_time['magi_reduce'][layer]
+                keep_reduce=sum(per_itr_record_time['keep_reduce']) if layer==-1 else per_itr_record_time['keep_reduce'][layer]
+                set_gradients=sum(per_itr_record_time['set_gradients']) if layer==-1 else per_itr_record_time['set_gradients'][layer]
+                
+                magi_log_str=f" total:{stime+ctime+rtime+magi_ctime+magi_reduce+keep_ctime+keep_reduce+set_gradients:6.2f}"
+                magi_log_str+=f"  magi_c:{magi_ctime:6.2f}"if magi_ctime>10 else ""
+                magi_log_str+=f" magi_rd:{magi_reduce:6.2f}"if magi_reduce>10 else ""
+                magi_log_str+=f"  keep_c:{keep_ctime:6.2f}"if keep_ctime>10 else ""
+                magi_log_str+=f" keep_rd:{keep_reduce:6.2f}"if keep_reduce>10 else ""
+                magi_log_str+=f" set_gradients:{set_gradients:6.2f}"if set_gradients>10 else ""
+
+            _print(log_str+time_log_str+magi_log_str)
+
+
+            # _print(f"rank:{RANK} layer:{layer} stime:{stime:6.2f} ctime_wait:{ctime_wait:6.2f} ctime:{ctime:6.2f} rtime:{rtime:6.2f} magi_stime:{magi_stime:6.2f} magi_ctime_wait:{magi_ctime_wait:6.2f} magi_ctime:{magi_ctime:6.2f} keep_ctime:{keep_ctime:6.2f} total_time:{stime+ctime+rtime+magi_stime+magi_ctime+keep_ctime:6.2f}")
 
 def save_global_token_log(gate,layer,itr,global_expert_count):
     if SAVE_GLOBAL_TOKEN_LOG:

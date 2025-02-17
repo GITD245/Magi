@@ -29,7 +29,7 @@ class magi_runtime():
         self.pl_local_token_count=[None] * self.num_layers
         self.pl_global_token_count=[None] * self.num_layers
         self.pl_all_rank_global_token_count=[None] * self.num_layers
-        self.pl_record_time={'stime':[0]* self.num_layers,
+        self.pl_record_fowd_time={'stime':[0]* self.num_layers,
                                       'ctime':[0]* self.num_layers,
                                       'ctime_wait':[0]* self.num_layers,
                                       'rtime':[0]* self.num_layers,
@@ -38,6 +38,16 @@ class magi_runtime():
                                       'magi_ctime':[0]* self.num_layers,
                                       'magi_ctime_wait':[0]* self.num_layers,
                                       'keep_ctime':[0]* self.num_layers}
+        self.pl_record_bawd_time={'stime':[0]* self.num_layers,
+                                      'ctime':[0]* self.num_layers,
+                                      'ctime_wait':[0]* self.num_layers,
+                                      'rtime':[0]* self.num_layers,
+                                      'rtime_wait':[0]* self.num_layers,
+                                      'magi_ctime':[0]* self.num_layers,
+                                      'magi_reduce':[0]* self.num_layers,
+                                      'keep_ctime':[0]* self.num_layers,
+                                      'keep_reduce':[0]* self.num_layers,
+                                      'set_gradients':[0]* self.num_layers}
         
         self.pl_send=torch.zeros(self.num_layers,self.world_size*self.num_experts, dtype=torch.bool)
         # [i*self.world_size+j] means rank j shoud receive expert i
@@ -73,17 +83,30 @@ class magi_runtime():
         if not self.eval:
             self.pl_all_rank_global_token_count[self.layer]=pl_all_rank_global_token_count
 
-    def record_layer_time(self,stime,ctime,ctime_wait,rtime,rtime_wait,magi_stime,magi_ctime,magi_ctime_wait,keep_ctime):
+    def record_fowd_layer_time(self,stime,ctime,ctime_wait,rtime,rtime_wait,magi_stime,magi_ctime,magi_ctime_wait,keep_ctime):
         if not self.eval:
-            self.pl_record_time['stime'][self.layer]=stime
-            self.pl_record_time['ctime'][self.layer]=ctime
-            self.pl_record_time['ctime_wait'][self.layer]=ctime_wait
-            self.pl_record_time['rtime'][self.layer]=rtime
-            self.pl_record_time['rtime_wait'][self.layer]=rtime_wait
-            self.pl_record_time['magi_stime'][self.layer]=magi_stime
-            self.pl_record_time['magi_ctime'][self.layer]=magi_ctime
-            self.pl_record_time['magi_ctime_wait'][self.layer]=magi_ctime_wait
-            self.pl_record_time['keep_ctime'][self.layer]=keep_ctime
+            self.pl_record_fowd_time['stime'][self.layer]=stime
+            self.pl_record_fowd_time['ctime'][self.layer]=ctime
+            self.pl_record_fowd_time['ctime_wait'][self.layer]=ctime_wait
+            self.pl_record_fowd_time['rtime'][self.layer]=rtime
+            self.pl_record_fowd_time['rtime_wait'][self.layer]=rtime_wait
+            self.pl_record_fowd_time['magi_stime'][self.layer]=magi_stime
+            self.pl_record_fowd_time['magi_ctime'][self.layer]=magi_ctime
+            self.pl_record_fowd_time['magi_ctime_wait'][self.layer]=magi_ctime_wait
+            self.pl_record_fowd_time['keep_ctime'][self.layer]=keep_ctime
+    
+    def record_bawd_layer_time(self,layer,stime,ctime,ctime_wait,rtime,rtime_wait,magi_ctime,magi_reduce,keep_ctime,keep_reduce,set_gradients):
+        if not self.eval:
+            self.pl_record_bawd_time['stime'][layer]=stime
+            self.pl_record_bawd_time['ctime'][layer]=ctime
+            self.pl_record_bawd_time['ctime_wait'][layer]=ctime_wait
+            self.pl_record_bawd_time['rtime'][layer]=rtime
+            self.pl_record_bawd_time['rtime_wait'][layer]=rtime_wait
+            self.pl_record_bawd_time['magi_ctime'][layer]=magi_ctime
+            self.pl_record_bawd_time['magi_reduce'][layer]=magi_reduce
+            self.pl_record_bawd_time['keep_ctime'][layer]=keep_ctime
+            self.pl_record_bawd_time['keep_reduce'][layer]=keep_reduce
+            self.pl_record_bawd_time['set_gradients'][layer]=set_gradients
 
     def get_send_models(self,layer=-1):
         if layer==-1:
@@ -210,7 +233,8 @@ class magi_runtime():
         self.global_token_deque.appendleft([value for value in self.pl_global_token_count])
         self.all_rank_global_token_deque.appendleft([value for value in self.pl_all_rank_global_token_count])
         
-        log.print_time(self.pl_record_time)
+        log.print_time(self.pl_record_fowd_time,fowd=True)
+        log.print_time(self.pl_record_bawd_time,fowd=False)
 
         # update keep_models
         self._cnt_down_keep_models()

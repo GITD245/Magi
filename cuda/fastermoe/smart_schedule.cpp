@@ -142,9 +142,8 @@ torch::Tensor
 _smart_sch_backward(torch::Tensor grad_out, torch::Tensor local_expert_count,
                     torch::Tensor global_expert_count,
                     torch::Tensor send_models, torch::Tensor receive_models, torch::Tensor keep_models,
-                    long buf_batch_size, long global_batch_size, long n_workers,
-                    py::function backward_fn,
-                    py::function collect_fn, py::function set_grad_fn) {
+                    long buf_batch_size, long global_batch_size, long n_workers, bool magi_profile_flag, py::function backward_fn,
+                    py::function collect_fn, py::function set_grad_fn, py::function record_layer_time_fn) {
   const auto num_experts = local_expert_count.size(0) / n_workers;
   auto smgr = getCudaStreamManager(grad_out.device().index());
   int rank;
@@ -157,7 +156,7 @@ _smart_sch_backward(torch::Tensor grad_out, torch::Tensor local_expert_count,
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(
       grad_out.scalar_type(), "fmoe_cuda_smartsch_backward", ([&] {
         fmoe_cuda_fused_backward_impl(
-            backward_fn, collect_fn, set_grad_fn,
+            backward_fn, record_layer_time_fn, collect_fn, set_grad_fn,
             grad_out.device(),
 
             grad_out.data_ptr<scalar_t>(), global_grad_out.data_ptr<scalar_t>(),
@@ -169,7 +168,7 @@ _smart_sch_backward(torch::Tensor grad_out, torch::Tensor local_expert_count,
             receive_models.data_ptr<bool>(),
             keep_models.data_ptr<int>(),
             d_model, num_experts, rank,
-            n_workers, pipeline_gran, smgr);
+            n_workers, pipeline_gran, magi_profile_flag, smgr);
       }));
   return grad_in;
 }
