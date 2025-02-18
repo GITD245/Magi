@@ -36,21 +36,21 @@ def print_time(per_itr_record_time,fowd=True,layer=-1):
                 magi_stime=sum(per_itr_record_time['magi_stime']) if layer==-1 else per_itr_record_time['magi_stime'][layer]
                 magi_ctime_wait=sum(per_itr_record_time['magi_ctime_wait']) if layer==-1 else per_itr_record_time['magi_ctime_wait'][layer]
                 
-                magi_log_str=f" total:{stime+ctime+rtime+magi_stime+magi_ctime+keep_ctime:6.2f}"
-                magi_log_str+=f"  magi_s:{magi_stime:6.2f}"if magi_stime>10 else ""
+                magi_log_str=f" total:{max(stime,magi_stime)+max(ctime,magi_ctime+keep_ctime)+rtime:6.2f}"
+                magi_log_str+=f" magi_s: {magi_stime:6.2f}"if magi_stime>10 else ""
                 magi_log_str+=f" magi_cw:{magi_ctime_wait:6.2f}"if magi_ctime_wait>1 else ""
-                magi_log_str+=f"  magi_c:{magi_ctime:6.2f}"if magi_ctime>10 else ""
-                magi_log_str+=f"  keep_c:{keep_ctime:6.2f}"if keep_ctime>10 else ""
+                magi_log_str+=f" magi_c: {magi_ctime:6.2f}"if magi_ctime>10 else ""
+                magi_log_str+=f" keep_c: {keep_ctime:6.2f}"if keep_ctime>10 else ""
             else:
                 log_str="backward"
                 magi_reduce=sum(per_itr_record_time['magi_reduce']) if layer==-1 else per_itr_record_time['magi_reduce'][layer]
                 keep_reduce=sum(per_itr_record_time['keep_reduce']) if layer==-1 else per_itr_record_time['keep_reduce'][layer]
                 set_gradients=sum(per_itr_record_time['set_gradients']) if layer==-1 else per_itr_record_time['set_gradients'][layer]
                 
-                magi_log_str=f" total:{stime+ctime+rtime+magi_ctime+magi_reduce+keep_ctime+keep_reduce+set_gradients:6.2f}"
-                magi_log_str+=f"  magi_c:{magi_ctime:6.2f}"if magi_ctime>10 else ""
+                magi_log_str=f" total:{stime+max(ctime,magi_ctime+keep_ctime)+max(rtime,magi_reduce+keep_reduce+set_gradients):6.2f}"
+                magi_log_str+=f" magi_c: {magi_ctime:6.2f}"if magi_ctime>10 else ""
                 magi_log_str+=f" magi_rd:{magi_reduce:6.2f}"if magi_reduce>10 else ""
-                magi_log_str+=f"  keep_c:{keep_ctime:6.2f}"if keep_ctime>10 else ""
+                magi_log_str+=f" keep_c: {keep_ctime:6.2f}" if keep_ctime>10 else ""
                 magi_log_str+=f" keep_rd:{keep_reduce:6.2f}"if keep_reduce>10 else ""
                 magi_log_str+=f" set_gradients:{set_gradients:6.2f}"if set_gradients>10 else ""
 

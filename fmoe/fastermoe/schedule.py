@@ -164,8 +164,8 @@ class MoEForward(Function):
             elif receive_or_keep_or_send==2:
                 expert_utils.set_grads(experts[global_expert_idx%num_expert], receive_grads[global_expert_idx]) 
 
-        def record_bawd_layer_time(time,ctime,ctime_wait,rtime,rtime_wait,magi_ctime,magi_reduce,keep_ctime,keep_reduce,set_gradients):
-            ctx.magi_runtime.record_bawd_layer_time(layer,time,ctime,ctime_wait,rtime,rtime_wait,magi_ctime,magi_reduce,keep_ctime,keep_reduce,set_gradients)
+        def record_bawd_layer_time(stime,ctime,ctime_wait,rtime,rtime_wait,magi_ctime,magi_reduce,keep_ctime,keep_reduce,set_gradients):
+            ctx.magi_runtime.record_bawd_layer_time(layer,stime,ctime,ctime_wait,rtime,rtime_wait,magi_ctime,magi_reduce,keep_ctime,keep_reduce,set_gradients)
 
         grad_out_buf = _local_scatter(grad_out.contiguous(), pos_g)
         grad_in_buf = fmoe_native.smart_sch_backward(
