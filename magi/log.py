@@ -1,9 +1,9 @@
 PRINT_RANK=-1
 
-PRINT_TIME=1
+PRINT_TIME=0
 PRINT_TOKEN=0
 PRINT_SEND_DEL=0
-PRINT_POLICY_TENSOR=0
+PRINT_POLICY_TENSOR=1
 
 SAVE_GLOBAL_TOKEN_LOG=0
 
@@ -70,7 +70,8 @@ def print_token(itr,layer,recive_token,origin_token):
 
 def print_policy_tensor(msg):
     if PRINT_POLICY_TENSOR:
-        _print(msg)
+        if (PRINT_RANK==-1 and RANK==0) or (PRINT_RANK==RANK):
+            _print(msg)
 
 def send_del_log(msg):
     if PRINT_SEND_DEL:

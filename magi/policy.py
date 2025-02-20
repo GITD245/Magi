@@ -108,22 +108,22 @@ def policy(runtime,pl_send,pl_receive):
     all_receive_token=list()
     for i in range(NUM_LAYERS):
         # MAGI_TODO:change 10 to a variable
-        _,receive_token=runtime.lg_token_to_or_token(i,10)
+        _,receive_token=runtime.lg_token_to_or_token(i)
         all_receive_token.extend(receive_token)
     sorted_expert_idx = sorted(range(len(all_receive_token)), key=lambda k: all_receive_token[k], reverse=True)
 
-    # BASIC POLICY 1 BROADCAST
+    # BASIC POLICY 1 RANKING BROADCAST
     # for i in range(PROXY_EXPERT_NUMS):
     #     expert_idx=sorted_expert_idx[i]%(WORLD_SIZE*NUM_EXPERTS)
     #     layer=sorted_expert_idx[i]//(WORLD_SIZE*NUM_EXPERTS)
     #     _set_boradcast_expert(layer,expert_idx,pl_send,pl_receive,runtime.global_pl_keep)
 
-    # BASIC POLICY 2 DOUBLE
+    # BASIC POLICY 2 RANKING DOUBLE
     for i in range(PROXY_EXPERT_NUMS):
         expert_idx=sorted_expert_idx[i]%(WORLD_SIZE*NUM_EXPERTS)
         layer=sorted_expert_idx[i]//(WORLD_SIZE*NUM_EXPERTS)
         rank_idx=expert_idx//NUM_EXPERTS
-        keep_model_nums=runtime.get_keep_model_nums(layer,expert_idx)+1
+        keep_model_nums=runtime.get_global_keep_models_nums(layer,expert_idx)
         receive_rank_interval=max(WORLD_SIZE//(keep_model_nums*2),1)
         receive_rank_idx_list=[(x+rank_idx)%WORLD_SIZE for x in range(0, WORLD_SIZE) if x % receive_rank_interval== 0]
         _set_double_expert(layer,expert_idx,receive_rank_idx_list,pl_send,pl_receive,runtime.global_pl_keep)

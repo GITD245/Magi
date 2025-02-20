@@ -14,7 +14,7 @@ class magi_runtime():
         self.model_keep_time=12
         self.window_size=10
         self.policy_interval=5
-        self.proxy_expert_nums=args.num_layers*args.fmoe_num_experts*args.data_parallel_size//10
+        self.proxy_expert_nums=args.num_layers*args.fmoe_num_experts*args.data_parallel_size//4
         
         self.d_model = args.hidden_size
         self.num_layers = args.num_layers
@@ -23,6 +23,7 @@ class magi_runtime():
         self.rank=args.rank
         self.total_input_size=args.seq_length*args.micro_batch_size*args.top_k*args.data_parallel_size
         self.magi_profile_flag=args.magi_profile_flag
+        self.magi_redirect=args.magi_token_redirect
         self.gate=args.balance_strategy
 
         # pl means per layer
@@ -123,13 +124,49 @@ class magi_runtime():
             layer=self.layer
         return torch.cat(self.global_pl_keep,dim=1)[layer]
     
-    def get_keep_model_nums(self,layer,expert_idx):
-        cnt=0
+    def get_global_keep_models_nums(self,layer,expert_idx):
+        # origin expert rank is not cnt in keep_models
+        cnt=1
         for rank_idx in range(self.world_size):
             if self.global_pl_keep[rank_idx][layer][expert_idx]>0:
                 cnt+=1
         return cnt
     
+    def token_send_to_which_rank(self,layer=-1):
+        if layer==-1:
+            layer=self.layer
+        res=torch.full(size=tuple([self.num_experts*self.world_size]),fill_value=-1,dtype=torch.int)
+
+        for expert_idx in range(self.world_size*self.num_experts):
+            origin_send_rank=expert_idx//self.num_experts
+            keep_models_nums=self.get_global_keep_models_nums(layer,expert_idx)
+            keep_rank_interval=self.world_size//keep_models_nums
+            if  keep_models_nums>1:
+                send_rank=(origin_send_rank+keep_rank_interval*\
+                                       (self.rank//keep_rank_interval-origin_send_rank//keep_rank_interval))\
+                                        %self.world_size
+                res[expert_idx]=send_rank     
+        return res
+    
+    def token_receive_from_which_rank(self,layer=-1):
+        if layer==-1:
+            layer=self.layer
+        keep_models=self.global_pl_keep[self.rank][layer]
+        res=torch.zeros(self.num_experts*self.world_size*self.world_size, dtype=torch.bool)
+
+        for expert_idx in range(self.world_size*self.num_experts):
+            keep_models_nums=self.get_global_keep_models_nums(layer,expert_idx)
+            if keep_models_nums>1: # exist global keep models
+                if expert_idx//self.num_experts==self.rank or keep_models[expert_idx]>0: 
+                    # this rank has expert_idx's keep_models or this rank is expert_idx's origin_send_rank
+                    keep_rank_interval=self.world_size//keep_models_nums
+                    keep_rank=self.rank//keep_rank_interval*keep_rank_interval
+                    res[expert_idx*self.world_size+keep_rank:expert_idx*self.world_size+keep_rank+keep_rank_interval]=True
+        # res[expert_idx*self.world_size+rank_idx]=True means this rank should receive expert_idx's token from rank_idx
+        return res
+                    
+                
+
     # def is_magi_expert_exist(self,flag_buf,rank_idx,expert_idx,layer=-1):
     #     if layer==-1:
     #         layer=self.layer
@@ -149,9 +186,11 @@ class magi_runtime():
     #     else:
     #         flag_buf[0]=False
 
-    def lg_token_to_or_token(self,layer=0,itr_cnt=1):
+    def lg_token_to_or_token(self,layer,itr_cnt=0):
         origin_token=list()
         receive_token=list()
+        if itr_cnt==0:
+            itr_cnt=self.window_size
         all_rank_global_token_count_tensor=self.all_rank_global_token_deque[0][layer]
         
         for i in range(1,min(itr_cnt,len(self.all_rank_global_token_deque))):
