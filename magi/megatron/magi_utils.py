@@ -5,7 +5,7 @@ def add_magi_args(parser):
 
     group.add_argument("--magi", action="store_true")
     group.add_argument("--magi-profile-flag", action="store_true")
-    group.add_argument("--magi-token-redirect", action="store_true")
+    group.add_argument("--magi-token-redirect-flag", action="store_true")
 
     # group.add_argument("--top-k", type=int, default=2)
     # group.add_argument("--balance-loss-weight", type=float, default=1)

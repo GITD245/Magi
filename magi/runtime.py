@@ -23,7 +23,7 @@ class magi_runtime():
         self.rank=args.rank
         self.total_input_size=args.seq_length*args.micro_batch_size*args.top_k*args.data_parallel_size
         self.magi_profile_flag=args.magi_profile_flag
-        self.magi_redirect=args.magi_token_redirect
+        self.magi_redirect=args.magi_token_redirect_flag
         self.gate=args.balance_strategy
 
         # pl means per layer
@@ -51,7 +51,7 @@ class magi_runtime():
                                       'set_gradients':[0]* self.num_layers}
         
         self.pl_send=torch.zeros(self.num_layers,self.world_size*self.num_experts, dtype=torch.bool)
-        # [i*self.world_size+j] means rank j shoud receive expert i
+        # [expert_idx*self.world_size+rank_idx] means rank_idx shoud receive expert_idx
         self.pl_receive=torch.zeros(self.num_layers,self.world_size*self.num_experts*self.world_size, dtype=torch.bool)
         self.global_pl_keep=[torch.zeros(self.num_layers, self.world_size*self.num_experts, dtype=torch.int) for _ in range(self.world_size)]
 
@@ -132,38 +132,76 @@ class magi_runtime():
                 cnt+=1
         return cnt
     
-    def token_send_to_which_rank(self,layer=-1):
+    def get_redirect_models(self,layer=-1):
         if layer==-1:
             layer=self.layer
-        res=torch.full(size=tuple([self.num_experts*self.world_size]),fill_value=-1,dtype=torch.int)
+        re_send=torch.full(size=tuple([self.num_experts*self.world_size]),fill_value=-1,dtype=torch.int)
+        re_receive=torch.zeros(self.num_experts*self.world_size*self.world_size, dtype=torch.bool)
+        re_unreceive=torch.zeros(self.num_experts*self.world_size*self.world_size, dtype=torch.bool)
+        # re_send: change expert_idx's token target from global origin expert to global magi expert
+        # re_receive: expert_idx's token receive for local magi expert
+        # re_unreceive: expert_idx's token unreceive for local origin expert
 
+        if not self.magi_redirect:
+            return re_send,re_receive,re_unreceive
+        
+        local_keep_models=self.global_pl_keep[self.rank][layer]
         for expert_idx in range(self.world_size*self.num_experts):
-            origin_send_rank=expert_idx//self.num_experts
-            keep_models_nums=self.get_global_keep_models_nums(layer,expert_idx)
-            keep_rank_interval=self.world_size//keep_models_nums
-            if  keep_models_nums>1:
-                send_rank=(origin_send_rank+keep_rank_interval*\
-                                       (self.rank//keep_rank_interval-origin_send_rank//keep_rank_interval))\
+            origin_rank=expert_idx//self.num_experts
+            global_keep_models_nums=self.get_global_keep_models_nums(layer,expert_idx)
+            keep_rank_interval=self.world_size//global_keep_models_nums
+            
+            # re_send
+            if global_keep_models_nums>1:
+                # expert_idx exist global magi models
+                send_rank=(origin_rank+keep_rank_interval*\
+                                       (self.rank//keep_rank_interval-origin_rank//keep_rank_interval))\
                                         %self.world_size
-                res[expert_idx]=send_rank     
-        return res
-    
-    def token_receive_from_which_rank(self,layer=-1):
-        if layer==-1:
-            layer=self.layer
-        keep_models=self.global_pl_keep[self.rank][layer]
-        res=torch.zeros(self.num_experts*self.world_size*self.world_size, dtype=torch.bool)
+                # don't send local token to local magi/origin expert
+                # don't send local token to global origin expert
+                if (send_rank!=self.rank and send_rank!=origin_rank):
+                    re_send[expert_idx]=send_rank
+            
+            # re_receive
+            if local_keep_models[expert_idx]>0: 
+                # local has expert_idx's magi expert
+                keep_rank=self.rank//keep_rank_interval*keep_rank_interval
+                re_receive[expert_idx*self.world_size+keep_rank:expert_idx*self.world_size+keep_rank+keep_rank_interval]=True
+                # don't receive local token for local magi/origin expert
+                re_receive[expert_idx*self.world_size+self.rank]=False
+                # don't receive global token for local origin expert
+                # re_receive[expert_idx*self.world_size+origin_rank]=0
+            
+            # re_unreceive
+            if global_keep_models_nums>1 and origin_rank==self.rank:
+                # expert_idx exist global magi models and local has origin expert
+                keep_rank=self.rank//keep_rank_interval*keep_rank_interval
+                re_unreceive[expert_idx*self.world_size:expert_idx*self.world_size+self.world_size]=True
+                re_unreceive[expert_idx*self.world_size+keep_rank:expert_idx*self.world_size+keep_rank+keep_rank_interval]=False
+                # receive global token for local origin expert
+                offset=self.rank%keep_rank_interval
+                for i in range(expert_idx*self.world_size+offset,expert_idx*self.world_size+offset+self.world_size,keep_rank_interval):
+                    re_unreceive[i]=False
 
-        for expert_idx in range(self.world_size*self.num_experts):
-            keep_models_nums=self.get_global_keep_models_nums(layer,expert_idx)
-            if keep_models_nums>1: # exist global keep models
-                if expert_idx//self.num_experts==self.rank or keep_models[expert_idx]>0: 
-                    # this rank has expert_idx's keep_models or this rank is expert_idx's origin_send_rank
-                    keep_rank_interval=self.world_size//keep_models_nums
-                    keep_rank=self.rank//keep_rank_interval*keep_rank_interval
-                    res[expert_idx*self.world_size+keep_rank:expert_idx*self.world_size+keep_rank+keep_rank_interval]=True
-        # res[expert_idx*self.world_size+rank_idx]=True means this rank should receive expert_idx's token from rank_idx
-        return res
+        return re_send,re_receive,re_unreceive
+    
+    # def get_redirect_token_receive_from_which_rank(self,layer=-1):
+    #     if layer==-1:
+    #         layer=self.layer
+    #     res=torch.zeros(self.num_experts*self.world_size*self.world_size, dtype=torch.bool)
+    #     if not self.magi_redirect:
+    #         return res
+        
+    #     keep_models=self.global_pl_keep[self.rank][layer]
+    #     for expert_idx in range(self.world_size*self.num_experts):
+    #         keep_models_nums=self.get_global_keep_models_nums(layer,expert_idx)
+    #         if keep_models[expert_idx]>0: 
+    #             # this rank has expert_idx's keep_models
+    #             keep_rank_interval=self.world_size//keep_models_nums
+    #             keep_rank=self.rank//keep_rank_interval*keep_rank_interval
+    #             res[expert_idx*self.world_size+keep_rank:expert_idx*self.world_size+keep_rank+keep_rank_interval]=True
+    #     # res[expert_idx*self.world_size+rank_idx]=True means this rank should receive expert_idx's token from rank_idx
+    #     return res
                     
                 
 
@@ -263,7 +301,6 @@ class magi_runtime():
         self.layer=0
 
     def next_layer(self):
-        # log._print(f'runtime_layer:{self.layer}')
         self.layer+=1
             
     def next_itr(self):

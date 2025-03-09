@@ -65,8 +65,9 @@ std::vector<torch::Tensor> _smart_sch_forward(
     torch::Tensor input_buf, // fwd_batch_size*1024
     torch::Tensor local_expert_count, torch::Tensor global_expert_count,
     torch::Tensor send_models, torch::Tensor receive_models, torch::Tensor keep_models,
-    long global_batch_size, long expert_size, long n_workers, bool magi_profile_flag, py::function forward_fn,
-    py::function registe_magi_expert_fn, py::function push_magi_expert_fn,
+    torch::Tensor re_send, torch::Tensor re_receive, torch::Tensor re_unreceive,
+    long global_batch_size, long expert_size, long n_workers, bool magi_profile_flag, bool magi_redirect_flag,
+    py::function forward_fn, py::function registe_magi_expert_fn, py::function push_magi_expert_fn,
     py::function record_layer_time_fn) {
   if (pipeline_gran == -1) {
     char *p = getenv("FMOE_FASTER_GROUP_SIZE");
@@ -132,18 +133,24 @@ std::vector<torch::Tensor> _smart_sch_forward(
             send_models.data_ptr<bool>(), receive_models.data_ptr<bool>(),
             keep_models.data_ptr<int>(),
 
+            re_send.data_ptr<int>(), re_receive.data_ptr<bool>(),
+            re_unreceive.data_ptr<bool>(),
+
             d_model, num_experts, rank, n_workers, expert_size, pipeline_gran,
-            magi_profile_flag, smgr);
+            magi_profile_flag, magi_redirect_flag, smgr);
       }));
   return {output_buf, global_input_buf};
 }
 
 torch::Tensor
-_smart_sch_backward(torch::Tensor grad_out, torch::Tensor local_expert_count,
-                    torch::Tensor global_expert_count,
-                    torch::Tensor send_models, torch::Tensor receive_models, torch::Tensor keep_models,
-                    long buf_batch_size, long global_batch_size, long n_workers, bool magi_profile_flag, py::function backward_fn,
-                    py::function collect_fn, py::function set_grad_fn, py::function record_layer_time_fn) {
+_smart_sch_backward(
+    torch::Tensor grad_out, torch::Tensor local_expert_count,
+    torch::Tensor global_expert_count,
+    torch::Tensor send_models, torch::Tensor receive_models, torch::Tensor keep_models,
+    torch::Tensor re_send, torch::Tensor re_receive, torch::Tensor re_unreceive,
+    long buf_batch_size, long global_batch_size, long n_workers,
+    bool magi_profile_flag, bool magi_redirect_flag,
+    py::function backward_fn, py::function collect_fn, py::function set_grad_fn, py::function record_layer_time_fn) {
   const auto num_experts = local_expert_count.size(0) / n_workers;
   auto smgr = getCudaStreamManager(grad_out.device().index());
   int rank;
@@ -164,11 +171,11 @@ _smart_sch_backward(torch::Tensor grad_out, torch::Tensor local_expert_count,
 
             local_expert_count.data_ptr<long>(),
             global_expert_count.data_ptr<long>(),
-            send_models.data_ptr<bool>(),
-            receive_models.data_ptr<bool>(),
-            keep_models.data_ptr<int>(),
+            send_models.data_ptr<bool>(), receive_models.data_ptr<bool>(), keep_models.data_ptr<int>(),
+            re_send.data_ptr<int>(), re_receive.data_ptr<bool>(),
+            re_unreceive.data_ptr<bool>(),
             d_model, num_experts, rank,
-            n_workers, pipeline_gran, magi_profile_flag, smgr);
+            n_workers, pipeline_gran, magi_profile_flag, magi_redirect_flag, smgr);
       }));
   return grad_in;
 }

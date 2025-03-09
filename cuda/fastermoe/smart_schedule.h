@@ -59,7 +59,7 @@ void exchangeWith(const scalar_t *sendbuf, size_t sendcount, int t_send, scalar_
 //   return is_magi_exist_flag;
 // }
 
-inline bool is_global_keep_expert_exist(long num_experts, long world_size, const int *keep_models) {
+bool is_global_keep_expert_exist(long num_experts, long world_size, const int *keep_models) { // NOLINT
   bool global_exist_flag = false;
   for (long j = 0; j < num_experts * world_size * world_size; ++j) {
     if (keep_models[j] > 0) {
@@ -70,10 +70,12 @@ inline bool is_global_keep_expert_exist(long num_experts, long world_size, const
   return global_exist_flag;
 }
 
-// local_ptr:local token,used in S_0 C_shadow R_0   global_ptr:token need to be
-// received,used in S_0 C_0 R_0
-void computePtrs(long num_experts, long rank, long world_size, const long *local_expert_count, // NOLINT
-                 const long *global_expert_count, const bool *send_models, const bool *receive_models, const int *keep_models, int *local_ptr, int *global_ptr) {
+// local_ptr:local token,used in S_0_send C_MAGI_keep R_0_receive
+// global_ptr:token need to be received,used in S_0_receive C_0 R_0_send
+void computePtrs(long num_experts, long rank, long world_size, // NOLINT
+                 const long *local_expert_count, const long *global_expert_count,
+                 const bool *receive_models, const int *keep_models, const bool *re_unreceive,
+                 int *local_ptr, int *global_ptr) {
   local_ptr[0] = global_ptr[0] = 0;
 
   for (int i = 0; i < num_experts * world_size; ++i) {
@@ -84,9 +86,10 @@ void computePtrs(long num_experts, long rank, long world_size, const long *local
     auto global_expert_idx = rank * num_experts + expert_idx;
     auto gp_idx = expert_idx * world_size + worker_idx;
 
-    // if local model wasn't become a magi_model, receive global tokens
+    // if local model wasn't become a magi_model or tokens weren't redirected, receive global tokens
     if (receive_models[global_expert_idx * world_size + worker_idx] ||
-        (keep_models[num_experts * world_size * worker_idx + global_expert_idx] > 0)) {
+        (keep_models[num_experts * world_size * worker_idx + global_expert_idx] > 0) ||
+        (re_unreceive[global_expert_idx * world_size + worker_idx])) {
       global_ptr[gp_idx + 1] = 0;
     } else {
       global_ptr[gp_idx + 1] = global_expert_count[i];
@@ -129,13 +132,15 @@ void fmoe_cuda_fused_forward_impl(
 
     const bool *send_models, const bool *receive_models, const int *keep_models,
 
+    const int *re_send, const bool *re_receive, const bool *re_unreceive,
+
     long d_model, long num_experts, long rank, long world_size, long expert_size,
-    long pipeline_gran, bool magi_profile_flag, CudaStreamManager *smgr) {
+    long pipeline_gran, bool magi_profile_flag, bool magi_redirect_flag, CudaStreamManager *smgr) {
   smgr->syncTorch();
 
   int *local_ptr = new int[num_experts * world_size + 1];
   int *global_ptr = new int[num_experts * world_size + 1];
-  computePtrs(num_experts, rank, world_size, local_expert_count, global_expert_count, send_models, receive_models, keep_models, local_ptr, global_ptr);
+  computePtrs(num_experts, rank, world_size, local_expert_count, global_expert_count, receive_models, keep_models, re_unreceive, local_ptr, global_ptr);
   if (pipeline_gran > world_size) {
     pipeline_gran = world_size;
   }
@@ -195,17 +200,21 @@ void fmoe_cuda_fused_forward_impl(
         int rank_send = j + to_base;
         int rank_recv = j + from_base;
         GEN_IDX;
-        // if send worker(send to local) has magi_expert(receive or keep), no need to send
+        // if send worker(send to local) has magi_expert(receive or keep) or tokens were redirected, no need to send
         exchangeWith(input_buf + local_ptr[idx_send] * d_model,
-                     local_expert_count[idx_send] * !receive_models[idx_send * world_size + rank] *
-                         !(keep_models[num_experts * world_size * rank + idx_send] > 0),
+                     local_expert_count[idx_send] *
+                         !receive_models[idx_send * world_size + rank] *
+                         !(keep_models[num_experts * world_size * rank + idx_send] > 0) *
+                         (re_send[idx_send] == -1),
                      rank_send,
 
                      // if recv worker(receive from global) has
-                     // magi_expert(receive or keep), no need to receive
+                     // magi_expert(receive or keep) or tokens were redirected, no need to receive
                      global_input_buf + global_ptr[gidx_recv] * d_model,
-                     global_expert_count[idx_recv] * !receive_models[idx_self * world_size + rank_recv] *
-                         !(keep_models[num_experts * world_size * rank_recv + idx_self] > 0),
+                     global_expert_count[idx_recv] *
+                         !receive_models[idx_self * world_size + rank_recv] *
+                         !(keep_models[num_experts * world_size * rank_recv + idx_self] > 0) *
+                         !(re_unreceive[idx_self * world_size + rank_recv]),
                      rank_recv,
 
                      d_model, smgr->stream(num_experts), smgr->ncclcomm);
@@ -213,6 +222,10 @@ void fmoe_cuda_fused_forward_impl(
       NCCL_SAFE_CALL(ncclGroupEnd());
     }
     cudaEventRecord(input_ready[step], smgr->stream(num_experts));
+  }
+
+  // S_MAGI_redirect
+  if (magi_redirect_flag) {
   }
   // Broadcast shadowed experts
   // cudaEvent_t evt_get, *evt_shadow;
@@ -327,7 +340,7 @@ void fmoe_cuda_fused_forward_impl(
   // }
   // pop_fn(0);
 
-  // Compute over magi experts (receive part)
+  // C_MAGI_receive
   for (long i = 0, receive_expert_cnt = 0; i < world_size * num_experts; ++i) {
     if (send_models[i]) {
       if (receive_models[i * world_size + rank]) {
@@ -349,7 +362,7 @@ void fmoe_cuda_fused_forward_impl(
     }
   }
 
-  // Compute over magi experts (keep part)
+  // C_MAGI_keep
   for (long i = 0, keep_expert_cnt = 0; i < world_size * num_experts; ++i) {
     if (magi_profile_flag)
       cudaEventRecord(keep_start[i], smgr->torchStream());
@@ -365,6 +378,10 @@ void fmoe_cuda_fused_forward_impl(
       cudaEventRecord(keep_end[i], smgr->torchStream());
   }
   // pop_fn(0);
+
+  // C_MAGI_redirect
+  if (magi_redirect_flag) {
+  }
 
   // R_0 ... R_n
   for (long step = 0; step < n_groups; ++step) {
@@ -382,19 +399,27 @@ void fmoe_cuda_fused_forward_impl(
         int rank_recv = j + to_base;
         GEN_IDX;
         exchangeWith(global_output_buf + global_ptr[gidx_send] * d_model,
-                     global_expert_count[idx_send] * !receive_models[idx_self * world_size + rank_send] *
-                         !(keep_models[num_experts * world_size * rank_send + idx_self] > 0),
+                     global_expert_count[idx_send] *
+                         !receive_models[idx_self * world_size + rank_send] *
+                         !(keep_models[num_experts * world_size * rank_send + idx_self] > 0) *
+                         !(re_unreceive[idx_self * world_size + rank_send]),
                      rank_send,
 
                      output_buf + local_ptr[idx_recv] * d_model,
-                     local_expert_count[idx_recv] * !receive_models[idx_recv * world_size + rank] *
-                         !(keep_models[num_experts * world_size * rank + idx_recv] > 0),
+                     local_expert_count[idx_recv] *
+                         !receive_models[idx_recv * world_size + rank] *
+                         !(keep_models[num_experts * world_size * rank + idx_recv] > 0) *
+                         (re_send[idx_recv] == -1),
                      rank_recv, d_model, smgr->stream(num_experts), smgr->ncclcomm);
       }
       NCCL_SAFE_CALL(ncclGroupEnd());
     }
     if (magi_profile_flag)
       cudaEventRecord(rtime_end[step], smgr->stream(num_experts));
+  }
+
+  // R_MAGI_redirect
+  if (magi_redirect_flag) {
   }
 
   if (magi_profile_flag) {
@@ -500,14 +525,15 @@ void fmoe_cuda_fused_backward_impl(
 
     const long *local_expert_count, const long *global_expert_count,
     const bool *send_models, const bool *receive_models, const int *keep_models,
+    const int *re_send, const bool *re_receive, const bool *re_unreceive,
     long d_model, long num_experts,
-    long rank, long world_size, long pipeline_gran, bool magi_profile_flag, CudaStreamManager *smgr) {
+    long rank, long world_size, long pipeline_gran, bool magi_profile_flag, bool magi_redirect_flag, CudaStreamManager *smgr) {
   smgr->syncTorch();
 
   int *local_ptr = new int[num_experts * world_size + 1];
   int *global_ptr = new int[num_experts * world_size + 1];
 
-  computePtrs(num_experts, rank, world_size, local_expert_count, global_expert_count, send_models, receive_models, keep_models, local_ptr, global_ptr);
+  computePtrs(num_experts, rank, world_size, local_expert_count, global_expert_count, receive_models, keep_models, re_unreceive, local_ptr, global_ptr);
   if (pipeline_gran > world_size) {
     pipeline_gran = world_size;
   }
@@ -569,13 +595,17 @@ void fmoe_cuda_fused_backward_impl(
         int rank_recv = j + from_base;
         GEN_IDX;
         exchangeWith(grad_out + local_ptr[idx_send] * d_model,
-                     local_expert_count[idx_send] * !receive_models[idx_send * world_size + rank] *
-                         !(keep_models[num_experts * world_size * rank + idx_send] > 0),
+                     local_expert_count[idx_send] *
+                         !receive_models[idx_send * world_size + rank] *
+                         !(keep_models[num_experts * world_size * rank + idx_send] > 0) *
+                         (re_send[idx_send] == -1),
                      rank_send,
 
                      global_grad_out + global_ptr[gidx_recv] * d_model,
-                     global_expert_count[idx_recv] * !receive_models[idx_self * world_size + rank_recv] *
-                         !(keep_models[num_experts * world_size * rank_recv + idx_self] > 0),
+                     global_expert_count[idx_recv] *
+                         !receive_models[idx_self * world_size + rank_recv] *
+                         !(keep_models[num_experts * world_size * rank_recv + idx_self] > 0) *
+                         !(re_unreceive[idx_self * world_size + rank_recv]),
                      rank_recv,
 
                      d_model, smgr->stream(num_experts), smgr->ncclcomm);
@@ -583,6 +613,10 @@ void fmoe_cuda_fused_backward_impl(
       NCCL_SAFE_CALL(ncclGroupEnd());
     }
     cudaEventRecord(input_ready[step], smgr->stream(num_experts));
+  }
+
+  // S_MAGI_redirect
+  if (magi_redirect_flag) {
   }
 
   // // Shadowed experts backward and reduce
@@ -607,7 +641,7 @@ void fmoe_cuda_fused_backward_impl(
   // pop_fn(0);
 
   long receive_expert_num = 0;
-  // magi experts backward and reduce (receive part)
+  // C_MAGI_receive+reduce
   cudaEvent_t *evt_receive_reduce = new cudaEvent_t[num_experts * world_size];
   for (long i = 0, receive_expert_cnt = 0; i < world_size * num_experts; ++i) {
     if (send_models[i]) {
@@ -636,7 +670,7 @@ void fmoe_cuda_fused_backward_impl(
   }
 
   long keep_expert_num = 0;
-  // magi experts backward and reduce (keep part)
+  // C_MAGI_keep+reduce
   cudaEvent_t *evt_keep_reduce = new cudaEvent_t[num_experts * world_size];
   for (long i = 0, keep_expert_cnt = 0; i < world_size * num_experts; ++i) {
     // torch::Tensor bool_tensor = torch::zeros({1}, torch::kBool);
@@ -668,6 +702,10 @@ void fmoe_cuda_fused_backward_impl(
     }
   }
   // pop_fn(0);
+
+  // C_MAGI_redirect+reduce
+  if (magi_redirect_flag) {
+  }
 
   // C_0 ... C_n
   for (long step = 0; step < n_groups; ++step) {
@@ -729,19 +767,27 @@ void fmoe_cuda_fused_backward_impl(
         int rank_recv = j + to_base;
         GEN_IDX;
         exchangeWith(global_grad_in + global_ptr[gidx_send] * d_model,
-                     global_expert_count[idx_send] * !receive_models[idx_self * world_size + rank_send] *
-                         !(keep_models[num_experts * world_size * rank_send + idx_self] > 0),
+                     global_expert_count[idx_send] *
+                         !receive_models[idx_self * world_size + rank_send] *
+                         !(keep_models[num_experts * world_size * rank_send + idx_self] > 0) *
+                         !(re_unreceive[idx_self * world_size + rank_send]),
                      rank_send,
 
                      grad_in + local_ptr[idx_recv] * d_model,
-                     local_expert_count[idx_recv] * !receive_models[idx_recv * world_size + rank] *
-                         !(keep_models[num_experts * world_size * rank + idx_recv] > 0),
+                     local_expert_count[idx_recv] *
+                         !receive_models[idx_recv * world_size + rank] *
+                         !(keep_models[num_experts * world_size * rank + idx_recv] > 0) *
+                         (re_send[idx_recv] == -1),
                      rank_recv, d_model, smgr->stream(num_experts), smgr->ncclcomm);
       }
       NCCL_SAFE_CALL(ncclGroupEnd());
     }
     if (magi_profile_flag)
       cudaEventRecord(rtime_end[step], smgr->stream(num_experts));
+  }
+
+  // R_MAGI_redirect
+  if (magi_redirect_flag) {
   }
 
   if (magi_profile_flag) {

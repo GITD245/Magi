@@ -22,9 +22,8 @@ class MoEForward(Function):
             inp,
             pos_s, pos_g,
             local_expert_count, global_expert_count,
-            send_models,
-            receive_models,
-            keep_models,
+            send_models,receive_models,keep_models,
+            re_send,re_receive,re_unreceive,
             fwd_batch_size, out_batch_size,
             num_expert,
             world_size,
@@ -81,18 +80,19 @@ class MoEForward(Function):
         #         ctx.receive[stash_expert_idx]=magi_expert.get_magi_expert_params(experts,global_expert_idx,local_input_buf)
         #     else:
         #         ctx.keep[stash_expert_idx]=magi_expert.get_magi_expert_params(experts,global_expert_idx,local_input_buf)
-        
+
         local_output_buf, gib = fmoe_native.smart_sch_forward(
-                local_input_buf, #8219*1024
-                local_expert_count,
-                global_expert_count, 
-                send_models,
-                receive_models,
-                keep_models,
+                local_input_buf,
+                local_expert_count,global_expert_count, 
+
+                send_models,receive_models,keep_models,
+                re_send,re_receive,re_unreceive,
+                
                 fwd_batch_size,
                 ctx.expert_size,
                 world_size,
                 magi_runtime.magi_profile_flag,
+                magi_runtime.magi_redirect,
                 _expert_forward,
                 magi_expert.registe_magi_expert,
                 magi_expert.push_magi_expert,
@@ -104,17 +104,16 @@ class MoEForward(Function):
         # gib and local_input_buf are necessary, because ctx.gibs are created
         # based on their memory
         variables = (pos_s, pos_g, local_expert_count, global_expert_count,
-                send_models, receive_models, keep_models, gib, local_input_buf)
+                send_models, receive_models, keep_models,re_send,re_receive,re_unreceive, gib, local_input_buf)
         layer=getattr(magi_runtime,'layer')
         ctx.moe_args = fwd_batch_size, inp.shape[0], num_expert, world_size ,layer
         ctx.save_for_backward(*variables)
-
         return out
 
     @staticmethod
     def backward(ctx, grad_out):
         (pos_s, pos_g, local_expert_count, global_expert_count,
-                send_models, receive_models, keep_models, _, local_input_buf) = ctx.saved_tensors
+                send_models, receive_models, keep_models,re_send,re_receive,re_unreceive, _, local_input_buf) = ctx.saved_tensors
         (fwd_batch_size, inp_batch_size, num_expert, world_size ,layer) = ctx.moe_args
         
         magi_expert=ctx.magi_runtime.magi_expert
@@ -171,18 +170,18 @@ class MoEForward(Function):
         grad_in_buf = fmoe_native.smart_sch_backward(
                 grad_out_buf,
                 local_expert_count, global_expert_count,
-                send_models,
-                receive_models,
-                keep_models,
+                send_models,receive_models,keep_models,
+                re_send,re_receive,re_unreceive,
                 pos_s.shape[0], fwd_batch_size,
                 world_size,
                 ctx.magi_runtime.magi_profile_flag,
+                ctx.magi_runtime.magi_redirect,
                 _expert_backward,
                 collect_fn,
                 set_grad_fn,
                 record_bawd_layer_time)
         grad_in = _local_gather(grad_in_buf, pos_s, inp_batch_size)
-        return (None, None, grad_in, None, None, None, None, None, None, None, None, None, None, None, None)
+        return (None, None, grad_in, None, None, None,None, None, None, None, None, None, None, None, None, None, None, None)
 
 policy_fn = None
 
@@ -206,10 +205,16 @@ def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, exp
     #     stored_models = policy_fn(local_expert_count, global_expert_count, # the res of policy_fn
     #             n_expert, world_size, inp.device)
 
-
+    # magi params
     send_models=magi_runtime.get_send_models()
     receive_models=magi_runtime.get_receive_models()
     keep_models=magi_runtime.get_keep_models()
+
+    # token redirect params
+    re_send,re_receive,re_unreceive=magi_runtime.get_redirect_models()
+    # print(f'rank:{magi_runtime.rank} re_send:{re_send}')
+    # print(f'rank:{magi_runtime.rank} re_receive:{re_receive}')
+    # print(f'rank:{magi_runtime.rank} re_unreceive:{re_unreceive}')
     
     topk = 1
     if len(gate.shape) == 2:
@@ -218,5 +223,7 @@ def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, exp
 
     return MoEForward.apply(expert_fn, experts, inp,
             torch.div(pos, topk, rounding_mode='floor'), pos,
-            local_expert_count, global_expert_count, send_models, receive_models,keep_models,
+            local_expert_count, global_expert_count,
+            send_models, receive_models,keep_models,
+            re_send,re_receive,re_unreceive,
             fwd_batch_size, out_batch_size, n_expert, world_size,magi_runtime)
