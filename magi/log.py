@@ -64,9 +64,9 @@ def save_global_token_log(gate,layer,itr,global_expert_count):
         with open(f"log/{gate}_{RANK}_global_token_count",'a') as f:
             f.write(f"layer:{layer} itr:{itr} global_expert_count:{global_expert_count}\n")
 
-def print_token(itr,layer,recive_token,origin_token): 
+def print_token(itr,layer,receive_token,origin_token): 
     if PRINT_TOKEN:        
-        _print(f"itr :{itr} layer:{layer} recive_token:{recive_token} origin_token:{origin_token}")
+        _print(f"itr :{itr} layer:{layer} receive_token:{receive_token} origin_token:{origin_token}")
 
 def print_policy_tensor(msg):
     if PRINT_POLICY_TENSOR:

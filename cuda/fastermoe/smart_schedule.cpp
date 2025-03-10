@@ -63,12 +63,13 @@ void _reduce_grad(torch::Tensor t, long expert_size) {
 
 std::vector<torch::Tensor> _smart_sch_forward(
     torch::Tensor input_buf, // fwd_batch_size*1024
-    torch::Tensor local_expert_count, torch::Tensor global_expert_count,
+    torch::Tensor local_expert_count, torch::Tensor global_expert_count, torch::Tensor redirect_expert_count,
     torch::Tensor send_models, torch::Tensor receive_models, torch::Tensor keep_models,
     torch::Tensor re_send, torch::Tensor re_receive, torch::Tensor re_unreceive,
-    long global_batch_size, long expert_size, long n_workers, bool magi_profile_flag, bool magi_redirect_flag,
-    py::function forward_fn, py::function registe_magi_expert_fn, py::function push_magi_expert_fn,
-    py::function record_layer_time_fn) {
+    long global_batch_size, long redirect_batch_size,
+    long expert_size, long n_workers,
+    bool magi_profile_flag, bool magi_redirect_flag,
+    py::function forward_fn, py::function registe_magi_expert_fn, py::function push_magi_expert_fn, py::function record_layer_time_fn) {
   if (pipeline_gran == -1) {
     char *p = getenv("FMOE_FASTER_GROUP_SIZE");
     if (p) {
@@ -88,8 +89,11 @@ std::vector<torch::Tensor> _smart_sch_forward(
 
   // TODO: maybe empty is faster
   auto global_input_buf = input_buf.new_zeros({global_batch_size, d_model});
-  auto global_output_buf = input_buf.new_zeros({global_batch_size, d_model});
+  auto redirect_input_buf = input_buf.new_zeros({redirect_batch_size, d_model});
+
   auto output_buf = input_buf.new_zeros({input_buf.size(0), d_model});
+  auto global_output_buf = input_buf.new_zeros({global_batch_size, d_model});
+  auto redirect_output_buf = input_buf.new_zeros({redirect_batch_size, d_model});
 
   std::vector<torch::Tensor> send_params;
   std::vector<torch::Tensor> receive_params;
@@ -105,7 +109,7 @@ std::vector<torch::Tensor> _smart_sch_forward(
         send_params.push_back(t);
       } else {
         if (receive_models_[i * n_workers + rank]) {
-          // recive expert param buffer
+          // receive expert param buffer
           registe_magi_expert_fn(t, i, 0);
           receive_params.push_back(t);
         }
@@ -124,17 +128,18 @@ std::vector<torch::Tensor> _smart_sch_forward(
 
             input_buf.data_ptr<scalar_t>(),
             global_input_buf.data_ptr<scalar_t>(),
-            global_output_buf.data_ptr<scalar_t>(),
+            redirect_input_buf.data_ptr<scalar_t>(),
             output_buf.data_ptr<scalar_t>(),
+            global_output_buf.data_ptr<scalar_t>(),
+            redirect_output_buf.data_ptr<scalar_t>(),
 
             local_expert_count.data_ptr<long>(),
             global_expert_count.data_ptr<long>(),
+            redirect_expert_count.data_ptr<long>(),
 
-            send_models.data_ptr<bool>(), receive_models.data_ptr<bool>(),
-            keep_models.data_ptr<int>(),
+            send_models.data_ptr<bool>(), receive_models.data_ptr<bool>(), keep_models.data_ptr<int>(),
 
-            re_send.data_ptr<int>(), re_receive.data_ptr<bool>(),
-            re_unreceive.data_ptr<bool>(),
+            re_send.data_ptr<int>(), re_receive.data_ptr<bool>(), re_unreceive.data_ptr<bool>(),
 
             d_model, num_experts, rank, n_workers, expert_size, pipeline_gran,
             magi_profile_flag, magi_redirect_flag, smgr);
@@ -144,11 +149,12 @@ std::vector<torch::Tensor> _smart_sch_forward(
 
 torch::Tensor
 _smart_sch_backward(
-    torch::Tensor grad_out, torch::Tensor local_expert_count,
-    torch::Tensor global_expert_count,
+    torch::Tensor grad_out,
+    torch::Tensor local_expert_count, torch::Tensor global_expert_count, torch::Tensor redirect_expert_count,
     torch::Tensor send_models, torch::Tensor receive_models, torch::Tensor keep_models,
     torch::Tensor re_send, torch::Tensor re_receive, torch::Tensor re_unreceive,
-    long buf_batch_size, long global_batch_size, long n_workers,
+    long buf_batch_size, long global_batch_size, long redirect_batch_size,
+    long n_workers,
     bool magi_profile_flag, bool magi_redirect_flag,
     py::function backward_fn, py::function collect_fn, py::function set_grad_fn, py::function record_layer_time_fn) {
   const auto num_experts = local_expert_count.size(0) / n_workers;
@@ -156,9 +162,13 @@ _smart_sch_backward(
   int rank;
   ncclCommUserRank(smgr->ncclcomm, &rank);
   const auto d_model = grad_out.size(1);
+
   auto global_grad_out = grad_out.new_zeros({global_batch_size, d_model});
-  auto global_grad_in = grad_out.new_zeros({global_batch_size, d_model});
+  auto redirect_grad_out = grad_out.new_zeros({redirect_batch_size, d_model});
+
   auto grad_in = grad_out.new_zeros({buf_batch_size, d_model});
+  auto global_grad_in = grad_out.new_zeros({global_batch_size, d_model});
+  auto redirect_grad_in = grad_out.new_zeros({redirect_batch_size, d_model});
 
   AT_DISPATCH_FLOATING_TYPES_AND_HALF(
       grad_out.scalar_type(), "fmoe_cuda_smartsch_backward", ([&] {
@@ -166,14 +176,19 @@ _smart_sch_backward(
             backward_fn, record_layer_time_fn, collect_fn, set_grad_fn,
             grad_out.device(),
 
-            grad_out.data_ptr<scalar_t>(), global_grad_out.data_ptr<scalar_t>(),
-            global_grad_in.data_ptr<scalar_t>(), grad_in.data_ptr<scalar_t>(),
+            grad_out.data_ptr<scalar_t>(),
+            global_grad_out.data_ptr<scalar_t>(),
+            redirect_grad_out.data_ptr<scalar_t>(),
+            grad_in.data_ptr<scalar_t>(),
+            global_grad_in.data_ptr<scalar_t>(),
+            redirect_grad_in.data_ptr<scalar_t>(),
 
             local_expert_count.data_ptr<long>(),
             global_expert_count.data_ptr<long>(),
+            redirect_expert_count.data_ptr<long>(),
+
             send_models.data_ptr<bool>(), receive_models.data_ptr<bool>(), keep_models.data_ptr<int>(),
-            re_send.data_ptr<int>(), re_receive.data_ptr<bool>(),
-            re_unreceive.data_ptr<bool>(),
+            re_send.data_ptr<int>(), re_receive.data_ptr<bool>(), re_unreceive.data_ptr<bool>(),
             d_model, num_experts, rank,
             n_workers, pipeline_gran, magi_profile_flag, magi_redirect_flag, smgr);
       }));

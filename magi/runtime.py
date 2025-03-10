@@ -53,7 +53,7 @@ class magi_runtime():
         self.pl_send=torch.zeros(self.num_layers,self.world_size*self.num_experts, dtype=torch.bool)
         # [expert_idx*self.world_size+rank_idx] means rank_idx shoud receive expert_idx
         self.pl_receive=torch.zeros(self.num_layers,self.world_size*self.num_experts*self.world_size, dtype=torch.bool)
-        self.global_pl_keep=[torch.zeros(self.num_layers, self.world_size*self.num_experts, dtype=torch.int) for _ in range(self.world_size)]
+        self.global_pl_keep=[torch.zeros(self.num_layers, self.world_size*self.num_experts, dtype=torch.int32) for _ in range(self.world_size)]
 
         self.local_token_deque=deque(maxlen=self.window_size)
         self.global_token_deque=deque(maxlen=self.window_size)
@@ -96,33 +96,27 @@ class magi_runtime():
             self.pl_record_fowd_time['magi_ctime_wait'][self.layer]=magi_ctime_wait
             self.pl_record_fowd_time['keep_ctime'][self.layer]=keep_ctime
     
-    def record_bawd_layer_time(self,layer,stime,ctime,ctime_wait,rtime,rtime_wait,magi_ctime,magi_reduce,keep_ctime,keep_reduce,set_gradients):
+    def record_bawd_layer_time(self,stime,ctime,ctime_wait,rtime,rtime_wait,magi_ctime,magi_reduce,keep_ctime,keep_reduce,set_gradients):
         if not self.eval:
-            self.pl_record_bawd_time['stime'][layer]=stime
-            self.pl_record_bawd_time['ctime'][layer]=ctime
-            self.pl_record_bawd_time['ctime_wait'][layer]=ctime_wait
-            self.pl_record_bawd_time['rtime'][layer]=rtime
-            self.pl_record_bawd_time['rtime_wait'][layer]=rtime_wait
-            self.pl_record_bawd_time['magi_ctime'][layer]=magi_ctime
-            self.pl_record_bawd_time['magi_reduce'][layer]=magi_reduce
-            self.pl_record_bawd_time['keep_ctime'][layer]=keep_ctime
-            self.pl_record_bawd_time['keep_reduce'][layer]=keep_reduce
-            self.pl_record_bawd_time['set_gradients'][layer]=set_gradients
+            self.pl_record_bawd_time['stime'][self.layer]=stime
+            self.pl_record_bawd_time['ctime'][self.layer]=ctime
+            self.pl_record_bawd_time['ctime_wait'][self.layer]=ctime_wait
+            self.pl_record_bawd_time['rtime'][self.layer]=rtime
+            self.pl_record_bawd_time['rtime_wait'][self.layer]=rtime_wait
+            self.pl_record_bawd_time['magi_ctime'][self.layer]=magi_ctime
+            self.pl_record_bawd_time['magi_reduce'][self.layer]=magi_reduce
+            self.pl_record_bawd_time['keep_ctime'][self.layer]=keep_ctime
+            self.pl_record_bawd_time['keep_reduce'][self.layer]=keep_reduce
+            self.pl_record_bawd_time['set_gradients'][self.layer]=set_gradients
 
-    def get_send_models(self,layer=-1):
-        if layer==-1:
-            layer=self.layer
-        return self.pl_send[layer]
+    def get_send_models(self):
+        return self.pl_send[self.layer]
 
-    def get_receive_models(self,layer=-1):
-        if layer==-1:
-            layer=self.layer
-        return self.pl_receive[layer]
+    def get_receive_models(self):
+        return self.pl_receive[self.layer]
     
-    def get_keep_models(self,layer=-1):
-        if layer==-1:
-            layer=self.layer
-        return torch.cat(self.global_pl_keep,dim=1)[layer]
+    def get_keep_models(self):
+        return torch.cat(self.global_pl_keep,dim=1)[self.layer]
     
     def get_global_keep_models_nums(self,layer,expert_idx):
         # origin expert rank is not cnt in keep_models
@@ -132,10 +126,8 @@ class magi_runtime():
                 cnt+=1
         return cnt
     
-    def get_redirect_models(self,layer=-1):
-        if layer==-1:
-            layer=self.layer
-        re_send=torch.full(size=tuple([self.num_experts*self.world_size]),fill_value=-1,dtype=torch.int)
+    def get_redirect_models(self):
+        re_send=torch.full(size=tuple([self.num_experts*self.world_size]),fill_value=-1,dtype=torch.int32)
         re_receive=torch.zeros(self.num_experts*self.world_size*self.world_size, dtype=torch.bool)
         re_unreceive=torch.zeros(self.num_experts*self.world_size*self.world_size, dtype=torch.bool)
         # re_send: change expert_idx's token target from global origin expert to global magi expert
@@ -145,10 +137,10 @@ class magi_runtime():
         if not self.magi_redirect:
             return re_send,re_receive,re_unreceive
         
-        local_keep_models=self.global_pl_keep[self.rank][layer]
+        local_keep_models=self.global_pl_keep[self.rank][self.layer]
         for expert_idx in range(self.world_size*self.num_experts):
             origin_rank=expert_idx//self.num_experts
-            global_keep_models_nums=self.get_global_keep_models_nums(layer,expert_idx)
+            global_keep_models_nums=self.get_global_keep_models_nums(self.layer,expert_idx)
             keep_rank_interval=self.world_size//global_keep_models_nums
             
             # re_send
@@ -184,6 +176,19 @@ class magi_runtime():
                     re_unreceive[i]=False
 
         return re_send,re_receive,re_unreceive
+    
+    def get_redirect_expert_count(self,re_receive):
+        if not self.magi_redirect:
+            return torch.tensor([],dtype=torch.long)
+        redirect_expert_count = list()
+        for i in range(len(re_receive)):
+            if (re_receive[i]):
+                recv_from_rank=i%self.world_size
+                recv_from_expert_idx=i//self.world_size
+                
+                offset=recv_from_rank*self.num_experts+(recv_from_expert_idx%self.num_experts)
+                redirect_expert_count.append(self.pl_all_rank_global_token_count[self.layer][recv_from_expert_idx//self.num_experts*self.world_size*self.num_experts+offset].item())
+        return torch.tensor(redirect_expert_count,dtype=torch.long)
     
     # def get_redirect_token_receive_from_which_rank(self,layer=-1):
     #     if layer==-1:
@@ -237,9 +242,9 @@ class magi_runtime():
         for expert_idx in range(self.world_size*self.num_experts):
             rank=expert_idx//self.num_experts
             global_token_count=all_rank_global_token_count_tensor[rank*self.num_experts*self.world_size:(rank+1)*self.num_experts*self.world_size]
-            # token needn't to be sent to other workers
+            # token needn't to send to other workers
             origin_token.append(global_token_count[rank*self.num_experts+expert_idx%self.num_experts].item())
-            # token need to be recived from other workers
+            # token need to receive from other workers
             receive_token.append(sum(global_token_count[(expert_idx%self.num_experts)::self.num_experts]).item()-origin_token[-1])
         
         log.print_token(self.itr,layer,receive_token,origin_token)
@@ -291,7 +296,7 @@ class magi_runtime():
 
     def _all_gather_keep_models(self):
         send_tensor = self.global_pl_keep[self.rank].cuda(torch.cuda.current_device()).contiguous()
-        receive_tensor_list=[torch.zeros(self.num_layers,self.world_size*self.num_experts, dtype=torch.int,device=torch.cuda.current_device()).contiguous() for _ in range(self.world_size)]
+        receive_tensor_list=[torch.zeros(self.num_layers,self.world_size*self.num_experts, dtype=torch.int32,device=torch.cuda.current_device()).contiguous() for _ in range(self.world_size)]
         
         dist.all_gather(receive_tensor_list,send_tensor)
 
@@ -302,11 +307,14 @@ class magi_runtime():
 
     def next_layer(self):
         self.layer+=1
+    
+    def pre_layer(self):
+        self.layer-=1
             
     def next_itr(self):
         # MAGI_TODO: unused?
-        self.local_token_deque.appendleft([value for value in self.pl_local_token_count])
-        self.global_token_deque.appendleft([value for value in self.pl_global_token_count])
+        # self.local_token_deque.appendleft([value for value in self.pl_local_token_count])
+        # self.global_token_deque.appendleft([value for value in self.pl_global_token_count])
         self.all_rank_global_token_deque.appendleft([value for value in self.pl_all_rank_global_token_count])
         
         log.print_time(self.pl_record_fowd_time,fowd=True)
@@ -322,5 +330,5 @@ class magi_runtime():
             self._init_send_receive_models()
             
         self.itr+=1
-        self.layer=0
+        self.reset_layer()
         

@@ -27,10 +27,9 @@ class magi_expert:
     def set_experts(self,experts):
         self.pl_experts.append(experts)
 
-    def registe_magi_expert(self,new_expert_buffer,global_expert_idx,send_expert_flag,layer=-1):
-        if layer==-1:
-            layer=self.magi_runtime.layer
-        expert=self.pl_experts[layer][global_expert_idx%self.num_experts]
+    def registe_magi_expert(self,new_expert_buffer,global_expert_idx,send_expert_flag):
+        layer=self.magi_runtime.layer
+        expert=self.pl_experts[self.magi_runtime.layer][global_expert_idx%self.num_experts]
         if send_expert_flag:
             # send part
             expert_utils.get_params(expert,new_expert_buffer)
@@ -42,16 +41,12 @@ class magi_expert:
             self.pl_experts[layer].append(new_expert)
             self.magi_expert_dic[(layer,global_expert_idx)]=len(self.pl_experts[layer])-1
 
-    def get_magi_expert_idx(self,global_expert_idx,layer=-1)->int:
-        if layer==-1:
-            layer=self.magi_runtime.layer
-        return self.magi_expert_dic[(layer,global_expert_idx)]
+    def get_magi_expert_idx(self,global_expert_idx)->int:
+        return self.magi_expert_dic[(self.magi_runtime.layer,global_expert_idx)]
          
-    def push_magi_expert(self,buffer,global_expert_idx,layer=-1):
-        if layer==-1:
-            layer=self.magi_runtime.layer
-        stored_idx=self.magi_expert_dic[(layer,global_expert_idx)]
-        expert_utils.push_params(buffer,self.pl_experts[layer][stored_idx])
+    def push_magi_expert(self,buffer,global_expert_idx):
+        stored_idx=self.magi_expert_dic[(self.magi_runtime.layer,global_expert_idx)]
+        expert_utils.push_params(buffer,self.pl_experts[self.magi_runtime.layer][stored_idx])
 
     # def get_magi_expert_params(self,experts,global_expert_idx,input_buf,layer=-1)->torch.Tensor:
     #     if layer==-1:

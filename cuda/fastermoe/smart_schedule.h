@@ -125,10 +125,10 @@ void fmoe_cuda_fused_forward_impl(
 
     std::vector<torch::Tensor> send_params, std::vector<torch::Tensor> receive_params,
 
-    scalar_t *input_buf, scalar_t *global_input_buf, scalar_t *global_output_buf,
-    scalar_t *output_buf,
+    scalar_t *input_buf, scalar_t *global_input_buf, scalar_t *redirect_input_buf,
+    scalar_t *output_buf, scalar_t *global_output_buf, scalar_t *redirect_output_buf,
 
-    const long *local_expert_count, const long *global_expert_count,
+    const long *local_expert_count, const long *global_expert_count, const long *redirect_expert_count,
 
     const bool *send_models, const bool *receive_models, const int *keep_models,
 
@@ -520,10 +520,10 @@ void fmoe_cuda_fused_backward_impl(
     py::function collect_fn,
     py::function set_grad_fn, c10::Device device,
 
-    scalar_t *grad_out, scalar_t *global_grad_out, scalar_t *global_grad_in,
-    scalar_t *grad_in,
+    scalar_t *grad_out, scalar_t *global_grad_out, scalar_t *redirect_grad_out,
+    scalar_t *grad_in, scalar_t *global_grad_in, scalar_t *redirect_grad_in,
 
-    const long *local_expert_count, const long *global_expert_count,
+    const long *local_expert_count, const long *global_expert_count, const long *redirect_expert_count,
     const bool *send_models, const bool *receive_models, const int *keep_models,
     const int *re_send, const bool *re_receive, const bool *re_unreceive,
     long d_model, long num_experts,

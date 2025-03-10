@@ -21,10 +21,10 @@ class MoEForward(Function):
             experts,
             inp,
             pos_s, pos_g,
-            local_expert_count, global_expert_count,
+            local_expert_count, global_expert_count,redirect_expert_count,
             send_models,receive_models,keep_models,
             re_send,re_receive,re_unreceive,
-            fwd_batch_size, out_batch_size,
+            fwd_batch_size, out_batch_size, redirect_batch_size,
             num_expert,
             world_size,
             magi_runtime):
@@ -83,39 +83,31 @@ class MoEForward(Function):
 
         local_output_buf, gib = fmoe_native.smart_sch_forward(
                 local_input_buf,
-                local_expert_count,global_expert_count, 
-
-                send_models,receive_models,keep_models,
-                re_send,re_receive,re_unreceive,
-                
-                fwd_batch_size,
-                ctx.expert_size,
-                world_size,
-                magi_runtime.magi_profile_flag,
-                magi_runtime.magi_redirect,
-                _expert_forward,
-                magi_expert.registe_magi_expert,
-                magi_expert.push_magi_expert,
-                magi_runtime.record_fowd_layer_time)
+                local_expert_count, global_expert_count, redirect_expert_count,
+                send_models, receive_models, keep_models,
+                re_send, re_receive, re_unreceive,
+                fwd_batch_size, redirect_batch_size,
+                ctx.expert_size, world_size,
+                magi_runtime.magi_profile_flag, magi_runtime.magi_redirect,
+                _expert_forward, magi_expert.registe_magi_expert, magi_expert.push_magi_expert, magi_runtime.record_fowd_layer_time)
         
         out = _local_gather(local_output_buf, pos_g, out_batch_size,
                 maybe_overlap=False)
         
         # gib and local_input_buf are necessary, because ctx.gibs are created
         # based on their memory
-        variables = (pos_s, pos_g, local_expert_count, global_expert_count,
+        variables = (pos_s, pos_g, local_expert_count, global_expert_count, redirect_expert_count,
                 send_models, receive_models, keep_models,re_send,re_receive,re_unreceive, gib, local_input_buf)
-        layer=getattr(magi_runtime,'layer')
-        ctx.moe_args = fwd_batch_size, inp.shape[0], num_expert, world_size ,layer
+        ctx.moe_args = fwd_batch_size, inp.shape[0],redirect_batch_size, num_expert, world_size
         ctx.save_for_backward(*variables)
         return out
 
     @staticmethod
     def backward(ctx, grad_out):
-        (pos_s, pos_g, local_expert_count, global_expert_count,
-                send_models, receive_models, keep_models,re_send,re_receive,re_unreceive, _, local_input_buf) = ctx.saved_tensors
-        (fwd_batch_size, inp_batch_size, num_expert, world_size ,layer) = ctx.moe_args
-        
+        ctx.magi_runtime.pre_layer()
+        (pos_s, pos_g, local_expert_count, global_expert_count, redirect_expert_count,
+        send_models, receive_models, keep_models,re_send,re_receive,re_unreceive, _, local_input_buf) = ctx.saved_tensors
+        (fwd_batch_size, inp_batch_size, redirect_batch_size, num_expert, world_size) = ctx.moe_args
         magi_expert=ctx.magi_runtime.magi_expert
         experts = ctx.experts
         receive_grads=[None] * world_size * num_expert
@@ -143,45 +135,39 @@ class MoEForward(Function):
             if receive_or_keep==0:
                 receive_grads[global_expert_idx]=local_input_buf.new_zeros(ctx.expert_size)
                 if magi_flag:
-                    expert_idx = magi_expert.get_magi_expert_idx(global_expert_idx,layer)
+                    expert_idx = magi_expert.get_magi_expert_idx(global_expert_idx)
                     expert_utils.collect_expert_grads(experts[expert_idx], receive_grads[global_expert_idx])
                 fmoe_native.reduce_grad(receive_grads[global_expert_idx], ctx.expert_size)
 
             elif receive_or_keep==1:
                 keep_grads[global_expert_idx]=local_input_buf.new_zeros(ctx.expert_size)
                 if magi_flag:
-                    expert_idx = magi_expert.get_magi_expert_idx(global_expert_idx,layer)
+                    expert_idx = magi_expert.get_magi_expert_idx(global_expert_idx)
                     expert_utils.collect_expert_grads(experts[expert_idx], keep_grads[global_expert_idx])
                 fmoe_native.reduce_grad(keep_grads[global_expert_idx], ctx.expert_size)
 
 
         def set_grad_fn(global_expert_idx,receive_or_keep_or_send):
             if receive_or_keep_or_send==0:
-                expert_utils.set_grads(experts[magi_expert.get_magi_expert_idx(global_expert_idx,layer)], receive_grads[global_expert_idx]) 
+                expert_utils.set_grads(experts[magi_expert.get_magi_expert_idx(global_expert_idx)], receive_grads[global_expert_idx]) 
             elif receive_or_keep_or_send==1:
-                expert_utils.set_grads(experts[magi_expert.get_magi_expert_idx(global_expert_idx,layer)], keep_grads[global_expert_idx]) 
+                expert_utils.set_grads(experts[magi_expert.get_magi_expert_idx(global_expert_idx)], keep_grads[global_expert_idx]) 
             elif receive_or_keep_or_send==2:
                 expert_utils.set_grads(experts[global_expert_idx%num_expert], receive_grads[global_expert_idx]) 
-
-        def record_bawd_layer_time(stime,ctime,ctime_wait,rtime,rtime_wait,magi_ctime,magi_reduce,keep_ctime,keep_reduce,set_gradients):
-            ctx.magi_runtime.record_bawd_layer_time(layer,stime,ctime,ctime_wait,rtime,rtime_wait,magi_ctime,magi_reduce,keep_ctime,keep_reduce,set_gradients)
 
         grad_out_buf = _local_scatter(grad_out.contiguous(), pos_g)
         grad_in_buf = fmoe_native.smart_sch_backward(
                 grad_out_buf,
-                local_expert_count, global_expert_count,
-                send_models,receive_models,keep_models,
-                re_send,re_receive,re_unreceive,
-                pos_s.shape[0], fwd_batch_size,
+                local_expert_count, global_expert_count,redirect_expert_count,
+                send_models, receive_models,keep_models,
+                re_send,re_receive, re_unreceive,
+                pos_s.shape[0], fwd_batch_size, redirect_batch_size,
                 world_size,
-                ctx.magi_runtime.magi_profile_flag,
-                ctx.magi_runtime.magi_redirect,
-                _expert_backward,
-                collect_fn,
-                set_grad_fn,
-                record_bawd_layer_time)
+                ctx.magi_runtime.magi_profile_flag, ctx.magi_runtime.magi_redirect,
+                _expert_backward, collect_fn, set_grad_fn, ctx.magi_runtime.record_bawd_layer_time)
         grad_in = _local_gather(grad_in_buf, pos_s, inp_batch_size)
-        return (None, None, grad_in, None, None, None,None, None, None, None, None, None, None, None, None, None, None, None)
+
+        return (None, None, grad_in, None, None, None,None, None, None, None, None, None, None, None, None, None, None, None, None, None)
 
 policy_fn = None
 
@@ -209,13 +195,12 @@ def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, exp
     send_models=magi_runtime.get_send_models()
     receive_models=magi_runtime.get_receive_models()
     keep_models=magi_runtime.get_keep_models()
-
+    
     # token redirect params
     re_send,re_receive,re_unreceive=magi_runtime.get_redirect_models()
-    # print(f'rank:{magi_runtime.rank} re_send:{re_send}')
-    # print(f'rank:{magi_runtime.rank} re_receive:{re_receive}')
-    # print(f'rank:{magi_runtime.rank} re_unreceive:{re_unreceive}')
-    
+    redirect_expert_count=magi_runtime.get_redirect_expert_count(re_receive)
+    redirect_batch_size=int(redirect_expert_count.sum().item())
+
     topk = 1
     if len(gate.shape) == 2:
         topk = gate.shape[1]
@@ -223,7 +208,7 @@ def _fmoe_general_global_forward(inp, gate, expert_fn, n_expert, world_size, exp
 
     return MoEForward.apply(expert_fn, experts, inp,
             torch.div(pos, topk, rounding_mode='floor'), pos,
-            local_expert_count, global_expert_count,
+            local_expert_count, global_expert_count,redirect_expert_count,
             send_models, receive_models,keep_models,
             re_send,re_receive,re_unreceive,
-            fwd_batch_size, out_batch_size, n_expert, world_size,magi_runtime)
+            fwd_batch_size, out_batch_size, redirect_batch_size, n_expert, world_size,magi_runtime)
