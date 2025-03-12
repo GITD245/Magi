@@ -86,6 +86,7 @@ std::vector<torch::Tensor> _smart_sch_forward(
 
   const auto num_experts = local_expert_count.size(0) / n_workers;
   const auto d_model = input_buf.size(1);
+  const long redirect_expert_nums = redirect_expert_count.size(0);
 
   // TODO: maybe empty is faster
   auto global_input_buf = input_buf.new_zeros({global_batch_size, d_model});
@@ -141,7 +142,7 @@ std::vector<torch::Tensor> _smart_sch_forward(
 
             re_send.data_ptr<int>(), re_receive.data_ptr<bool>(), re_unreceive.data_ptr<bool>(),
 
-            d_model, num_experts, rank, n_workers, expert_size, pipeline_gran,
+            redirect_expert_nums, d_model, num_experts, rank, n_workers, expert_size, pipeline_gran,
             magi_profile_flag, magi_redirect_flag, smgr);
       }));
   return {output_buf, global_input_buf};
@@ -158,6 +159,7 @@ _smart_sch_backward(
     bool magi_profile_flag, bool magi_redirect_flag,
     py::function backward_fn, py::function collect_fn, py::function set_grad_fn, py::function record_layer_time_fn) {
   const auto num_experts = local_expert_count.size(0) / n_workers;
+  const long redirect_expert_nums = redirect_expert_count.size(0);
   auto smgr = getCudaStreamManager(grad_out.device().index());
   int rank;
   ncclCommUserRank(smgr->ncclcomm, &rank);
@@ -187,10 +189,11 @@ _smart_sch_backward(
             global_expert_count.data_ptr<long>(),
             redirect_expert_count.data_ptr<long>(),
 
-            send_models.data_ptr<bool>(), receive_models.data_ptr<bool>(), keep_models.data_ptr<int>(),
+            send_models.data_ptr<bool>(),
+            receive_models.data_ptr<bool>(), keep_models.data_ptr<int>(),
             re_send.data_ptr<int>(), re_receive.data_ptr<bool>(), re_unreceive.data_ptr<bool>(),
-            d_model, num_experts, rank,
-            n_workers, pipeline_gran, magi_profile_flag, magi_redirect_flag, smgr);
+            redirect_expert_nums, d_model, num_experts, rank, n_workers, pipeline_gran,
+            magi_profile_flag, magi_redirect_flag, smgr);
       }));
   return grad_in;
 }

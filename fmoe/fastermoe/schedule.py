@@ -25,21 +25,25 @@ class MoEForward(Function):
             send_models,receive_models,keep_models,
             re_send,re_receive,re_unreceive,
             fwd_batch_size, out_batch_size, redirect_batch_size,
-            num_expert,
+            num_experts,
             world_size,
             magi_runtime):
         local_input_buf = _local_scatter(inp, pos_s)
 
         magi_expert=magi_runtime.magi_expert
         ctx.magi_runtime=magi_runtime
-        # ctx gibs gobs : original experts/receive experts/keep experts
-        ctx.gibs = [None] * (world_size * num_expert * 2)
-        ctx.gobs = [None] * (world_size * num_expert * 2)
+        # ctx gibs gobs : 
+        # num_experts * world_size:original experts
+        # num_experts * world_size:receive experts
+        # num_experts * world_size:keep experts
+        # num_experts * world_size * world_size:redirect
+        ctx.gibs = [None] * (num_experts * world_size * 3+num_experts * world_size * world_size)
+        ctx.gobs = [None] * (num_experts * world_size * 3+num_experts * world_size * world_size)
         ctx.experts = experts
         # ctx.expert_size = expert_utils.get_expert_param_size(experts[0])
         ctx.expert_size = magi_expert.expert_size
 
-        # for i in range(num_expert):
+        # for i in range(num_experts):
         #     assert ctx.expert_size == expert_utils.get_expert_param_size(experts[i]), "report expert_size bug"            
 
         def _expert_forward(x, y, expert_idx, store_idx ,magi_flag):
@@ -98,7 +102,7 @@ class MoEForward(Function):
         # based on their memory
         variables = (pos_s, pos_g, local_expert_count, global_expert_count, redirect_expert_count,
                 send_models, receive_models, keep_models,re_send,re_receive,re_unreceive, gib, local_input_buf)
-        ctx.moe_args = fwd_batch_size, inp.shape[0],redirect_batch_size, num_expert, world_size
+        ctx.moe_args = fwd_batch_size, inp.shape[0],redirect_batch_size, num_experts, world_size
         ctx.save_for_backward(*variables)
         return out
 
@@ -107,11 +111,11 @@ class MoEForward(Function):
         ctx.magi_runtime.pre_layer()
         (pos_s, pos_g, local_expert_count, global_expert_count, redirect_expert_count,
         send_models, receive_models, keep_models,re_send,re_receive,re_unreceive, _, local_input_buf) = ctx.saved_tensors
-        (fwd_batch_size, inp_batch_size, redirect_batch_size, num_expert, world_size) = ctx.moe_args
+        (fwd_batch_size, inp_batch_size, redirect_batch_size, num_experts, world_size) = ctx.moe_args
         magi_expert=ctx.magi_runtime.magi_expert
         experts = ctx.experts
-        receive_grads=[None] * world_size * num_expert
-        keep_grads=[None] * world_size * num_expert
+        receive_grads=[None] * world_size * num_experts
+        keep_grads=[None] * world_size * num_experts
         def _expert_backward(grad_y, grad_x, expert_idx, store_idx ,magi_flag):
             y = ctx.gobs[store_idx]
             x = ctx.gibs[store_idx]
@@ -153,7 +157,7 @@ class MoEForward(Function):
             elif receive_or_keep_or_send==1:
                 expert_utils.set_grads(experts[magi_expert.get_magi_expert_idx(global_expert_idx)], keep_grads[global_expert_idx]) 
             elif receive_or_keep_or_send==2:
-                expert_utils.set_grads(experts[global_expert_idx%num_expert], receive_grads[global_expert_idx]) 
+                expert_utils.set_grads(experts[global_expert_idx%num_experts], receive_grads[global_expert_idx]) 
 
         grad_out_buf = _local_scatter(grad_out.contiguous(), pos_g)
         grad_in_buf = fmoe_native.smart_sch_backward(
