@@ -5,7 +5,6 @@ import torch
 import torch.nn as nn
 from .layers import FMoE
 from .linear import FMoELinear
-from .fastermoe.config import switch_from_env
 
 
 class _Expert(nn.Module):

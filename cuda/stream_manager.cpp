@@ -1,12 +1,12 @@
 #include <ATen/cuda/CUDAContext.h>
 #include <c10/cuda/CUDAGuard.h>
 #include <cassert>
-#include <iostream>
+#include <iostream> // IWYU pragma: keep
 #include <mutex>
-#include <thread>
+#include <thread> // IWYU pragma: keep
 #include <unordered_map>
 
-#include "fastermoe/status.h"
+#include "magi/status.h" // IWYU pragma: keep
 #include "stream_manager.h"
 
 #define SMGR_N_STREAMS 16

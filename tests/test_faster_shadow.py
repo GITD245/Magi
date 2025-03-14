@@ -9,9 +9,9 @@ import torch
 import torch.distributed as dist
 import torch.nn.functional as F
 from fmoe.functions import ensure_comm
-from test_ddp import _ensure_initialized, _run_distributed
-from test_numerical import _assert_numerical
-from fmoe.fastermoe.schedule import _fmoe_general_global_forward as smart_fwd
+from tests.test_ddp import _ensure_initialized, _run_distributed
+from tests.test_numerical import _assert_numerical
+from fmoe.magi.schedule import _fmoe_general_global_forward as smart_fwd
 from fmoe.layers import _fmoe_general_global_forward as naive_fwd
 
 

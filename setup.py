@@ -13,7 +13,8 @@ authors = [
         'Tiago Antunes', 
         'Jinjun Peng', 
         'Qin Li',
-        'Mingshu Zhai'
+        'Mingshu Zhai',
+        'Yuntao Nie'
 ]
 
 is_rocm_pytorch = False
@@ -40,14 +41,14 @@ else:
 
 if __name__ == '__main__':
     setuptools.setup(
-        name='fastmoe',
-        version='1.1.0',
-        description='An efficient Mixture-of-Experts system for PyTorch',
+        name='magi',
+        version='1.0.0',
+        description='An efficient MoE expert parallel training system base on FastMoE and Megatron',
         author=', '.join(authors),
-        author_email='hja20@mails.tsinghua.edu.cn',
+        author_email='hja20@mails.tsinghua.edu.cn,nieyuntao@hust.edu.cn',
         license='Apache-2',
-        url='https://github.com/laekov/fastmoe',
-        packages=['fmoe', 'fmoe.megatron', 'fmoe.gates', 'fmoe.fastermoe'],
+        url='https://github.com/laekov/fastmoe,https://github.com/GITD245/Magi',
+        packages=['fmoe', 'fmoe.megatron', 'fmoe.gates', 'fmoe.magi'],
         ext_modules=[
             CUDAExtension(
                 name='fmoe_cuda', 
@@ -58,7 +59,7 @@ if __name__ == '__main__':
                     'cuda/global_exchange.cpp',
                     'cuda/parallel_linear.cu',
                     'cuda/fmoe_cuda.cpp',
-                    'cuda/fastermoe/smart_schedule.cpp',
+                    'cuda/magi/smart_schedule.cpp',
                     ],
                 define_macros=define_macros,
                 extra_compile_args={
