@@ -104,6 +104,8 @@ def _set_boradcast_expert(layer,boradcast_expert_idx,pl_send,pl_receive,global_p
     _check_send_receive_keep(layer,boradcast_expert_idx,pl_send,pl_receive,global_pl_keep)
 
 def policy(runtime,pl_send,pl_receive):
+    if runtime.magi_no_policy:
+        return
     receive_token=list()
     all_receive_token=list()
     for i in range(NUM_LAYERS):
@@ -127,7 +129,6 @@ def policy(runtime,pl_send,pl_receive):
         receive_rank_interval=max(WORLD_SIZE//(keep_model_nums*2),1)
         receive_rank_idx_list=[(x+rank_idx)%WORLD_SIZE for x in range(0, WORLD_SIZE) if x % receive_rank_interval== 0]
         _set_double_expert(layer,expert_idx,receive_rank_idx_list,pl_send,pl_receive,runtime.global_pl_keep)
-    pass
 
 def using_policy(runtime):
     pl_send=torch.zeros(NUM_LAYERS,WORLD_SIZE*NUM_EXPERTS, dtype=torch.bool,device=torch.cuda.current_device())

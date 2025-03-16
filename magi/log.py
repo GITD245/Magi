@@ -1,20 +1,34 @@
-PRINT_RANK=-1
+import torch
+import os
 
+PRINT_RANK=0
 PRINT_TIME=1
-PRINT_TOKEN=0
 PRINT_SEND_DEL=0
 PRINT_POLICY_TENSOR=0
 
-SAVE_GLOBAL_TOKEN_LOG=0
+SAVE_ALL_GLOBAL_TOKEN_LOG=1
+SAVE_OR_TOKEN=1
 
 RANK=None
 MAGI_PROFILER=0
+FILE_NAME_TAIL=None
 
-def init_log(rank,magi_profile_flag):
+def init_log(runtime):
     global RANK
     global MAGI_PROFILER
-    RANK=rank
-    MAGI_PROFILER=magi_profile_flag
+    global FILE_NAME_TAIL
+    RANK=runtime.rank
+    MAGI_PROFILER=runtime.magi_profile_flag
+    torch.set_printoptions(linewidth=1000)
+
+    FILE_NAME_TAIL=f"gate-{runtime.gate}_-ws_{runtime.world_size}_layer-{runtime.num_layers}_bs-{runtime.global_batch_size}_topk-{runtime.topk}_ep-{runtime.num_experts}_hidden-{runtime.d_model}.log"
+
+    if runtime.rank==runtime.world_size-1 and os.path.exists(f"logs/{runtime.model}/token_count_{FILE_NAME_TAIL}"):
+            os.remove(f"logs/{runtime.model}/token_count_{FILE_NAME_TAIL}")
+
+    if runtime.rank==runtime.world_size-1 and os.path.exists(f"logs/{runtime.model}/or_token_count_{FILE_NAME_TAIL}"):
+            os.remove(f"logs/{runtime.model}/or_token_count_{FILE_NAME_TAIL}")
+
 
 def print_time(per_itr_record_time,fowd=True,layer=-1):
     if MAGI_PROFILER:
@@ -59,14 +73,15 @@ def print_time(per_itr_record_time,fowd=True,layer=-1):
 
             # _print(f"rank:{RANK} layer:{layer} stime:{stime:6.2f} ctime_wait:{ctime_wait:6.2f} ctime:{ctime:6.2f} rtime:{rtime:6.2f} magi_stime:{magi_stime:6.2f} magi_ctime_wait:{magi_ctime_wait:6.2f} magi_ctime:{magi_ctime:6.2f} keep_ctime:{keep_ctime:6.2f} total_time:{stime+ctime+rtime+magi_stime+magi_ctime+keep_ctime:6.2f}")
 
-def save_global_token_log(gate,layer,itr,global_expert_count):
-    if SAVE_GLOBAL_TOKEN_LOG:
-        with open(f"log/{gate}_{RANK}_global_token_count",'a') as f:
-            f.write(f"layer:{layer} itr:{itr} global_expert_count:{global_expert_count}\n")
+def save_global_token_log(runtime,all_global_expert_count):
+    if SAVE_ALL_GLOBAL_TOKEN_LOG and runtime.rank==runtime.world_size-1:
+        with open(f"logs/{runtime.model}/token_count_{FILE_NAME_TAIL}",'a') as f:
+            f.write(f"itr:{runtime.itr} layer:{runtime.layer} all_global_expert_count:{all_global_expert_count}\n")
 
-def print_token(itr,layer,receive_token,origin_token): 
-    if PRINT_TOKEN:        
-        _print(f"itr :{itr} layer:{layer} receive_token:{receive_token} origin_token:{origin_token}")
+def save_or_token(runtime,receive_token,origin_token): 
+    if SAVE_OR_TOKEN and runtime.rank==runtime.world_size-1:
+        with open(f"logs/{runtime.model}/or_token_count_{FILE_NAME_TAIL}",'a') as f:
+            f.write(f"itr:{runtime.itr} layer:{runtime.layer} recv_rate:{sum(receive_token)/runtime.total_input_size:.2f} recv_token:{receive_token}\n")
 
 def print_policy_tensor(msg):
     if PRINT_POLICY_TENSOR:

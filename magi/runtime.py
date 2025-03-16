@@ -16,20 +16,25 @@ class magi_runtime():
         self.policy_interval=5
         self.proxy_expert_nums=args.num_layers*args.fmoe_num_experts*args.data_parallel_size//4
         
+        self.model=args.magi_model
         self.d_model = args.hidden_size
         self.num_layers = args.num_layers
         self.num_experts = args.fmoe_num_experts
         self.world_size = args.data_parallel_size
         self.rank=args.rank
+        self.topk=args.top_k
+        self.global_batch_size=args.global_batch_size
         self.total_input_size=args.seq_length*args.micro_batch_size*args.top_k*args.data_parallel_size
-        self.magi_profile_flag=args.magi_profile_flag
-        self.magi_redirect=args.magi_token_redirect_flag
         self.gate=args.balance_strategy
 
+        self.magi_profile_flag=args.magi_profile_flag
+        self.magi_redirect=args.magi_token_redirect_flag
+        self.magi_no_policy=args.magi_no_policy
+
         # pl means per layer
-        self.pl_local_token_count=[None] * self.num_layers
-        self.pl_global_token_count=[None] * self.num_layers
-        self.pl_all_rank_global_token_count=[None] * self.num_layers
+        # self.pl_local_token_count=[None] * self.num_layers
+        # self.pl_global_token_count=[None] * self.num_layers
+        # self.pl_all_rank_global_token_count=[None] * self.num_layers
         self.pl_record_fowd_time={'stime':[0]* self.num_layers,
                                       'ctime':[0]* self.num_layers,
                                       'ctime_wait':[0]* self.num_layers,
@@ -55,34 +60,36 @@ class magi_runtime():
         self.pl_receive=torch.zeros(self.num_layers,self.world_size*self.num_experts*self.world_size, dtype=torch.bool)
         self.global_pl_keep=[torch.zeros(self.num_layers, self.world_size*self.num_experts, dtype=torch.int32) for _ in range(self.world_size)]
 
-        self.local_token_deque=deque(maxlen=self.window_size)
-        self.global_token_deque=deque(maxlen=self.window_size)
+        # self.local_token_deque=deque(maxlen=self.window_size)
+        # self.global_token_deque=deque(maxlen=self.window_size)
         self.all_rank_global_token_deque=deque(maxlen=self.window_size)
+        self.all_rank_global_token_deque.appendleft([None] * self.num_layers)
 
         self.eval=False
-        self.itr=1
+        self.itr=0
         self.layer=0
         
         policy.init_policy(self.world_size,self.num_experts,self.num_layers,self.model_keep_time,self.proxy_expert_nums)
-        log.init_log(args.rank,args.magi_profile_flag)
+        log.init_log(self)
         self.magi_expert=magi_experts.magi_expert(self)
 
     def set_eval(self,eval_flag):
         self._init_send_receive_models()
         self.eval=eval_flag
 
-    def record_local_expert_count(self,local_expert_count):
-        if not self.eval:
-            self.pl_local_token_count[self.layer]=local_expert_count
+    # def record_local_expert_count(self,local_expert_count):
+    #     if not self.eval:
+    #         self.pl_local_token_count[self.layer]=local_expert_count
 
-    def record_global_expert_count(self,global_expert_count):
-        if not self.eval:
-            self.pl_global_token_count[self.layer]=global_expert_count
-            log.save_global_token_log(self.gate,self.layer,self.itr,global_expert_count)
+    # def record_global_expert_count(self,global_expert_count):
+    #     if not self.eval:
+    #         self.pl_global_token_count[self.layer]=global_expert_count
+    #         log.save_global_token_log(self.gate,self.layer,self.itr,global_expert_count)
     
-    def record_all_rank_global_expert_count(self,pl_all_rank_global_token_count):
+    def record_all_rank_global_expert_count(self,all_rank_global_token_count):
         if not self.eval:
-            self.pl_all_rank_global_token_count[self.layer]=pl_all_rank_global_token_count
+            self.all_rank_global_token_deque[0][self.layer]=all_rank_global_token_count
+            log.save_global_token_log(self,all_rank_global_token_count)
 
     def record_fowd_layer_time(self,stime,ctime,ctime_wait,rtime,rtime_wait,magi_stime,magi_ctime,magi_ctime_wait,keep_ctime):
         if not self.eval:
@@ -187,7 +194,7 @@ class magi_runtime():
                 recv_from_expert_idx=i//self.world_size
                 
                 offset=recv_from_rank*self.num_experts+(recv_from_expert_idx%self.num_experts)
-                redirect_expert_count.append(self.pl_all_rank_global_token_count[self.layer][recv_from_expert_idx//self.num_experts*self.world_size*self.num_experts+offset].item())
+                redirect_expert_count.append(self.all_rank_global_token_deque[0][self.layer][recv_from_expert_idx//self.num_experts*self.world_size*self.num_experts+offset].item())
         return torch.tensor(redirect_expert_count,dtype=torch.long)
     
     # def get_redirect_token_receive_from_which_rank(self,layer=-1):
@@ -208,8 +215,6 @@ class magi_runtime():
     #     # res[expert_idx*self.world_size+rank_idx]=True means this rank should receive expert_idx's token from rank_idx
     #     return res
                     
-                
-
     # def is_magi_expert_exist(self,flag_buf,rank_idx,expert_idx,layer=-1):
     #     if layer==-1:
     #         layer=self.layer
@@ -247,7 +252,7 @@ class magi_runtime():
             # token need to receive from other workers
             receive_token.append(sum(global_token_count[(expert_idx%self.num_experts)::self.num_experts]).item()-origin_token[-1])
         
-        log.print_token(self.itr,layer,receive_token,origin_token)
+        log.save_or_token(self,receive_token,origin_token)
       
         return origin_token,receive_token
     
@@ -306,19 +311,18 @@ class magi_runtime():
         self.layer=0
 
     def next_layer(self):
+        log.print_time(self.pl_record_fowd_time,fowd=True,layer=self.layer)
+        self.lg_token_to_or_token(self.layer,itr_cnt=1)
         self.layer+=1
     
     def pre_layer(self):
         self.layer-=1
+        log.print_time(self.pl_record_bawd_time,fowd=False,layer=self.layer)
             
     def next_itr(self):
-        # MAGI_TODO: unused?
-        # self.local_token_deque.appendleft([value for value in self.pl_local_token_count])
-        # self.global_token_deque.appendleft([value for value in self.pl_global_token_count])
-        self.all_rank_global_token_deque.appendleft([value for value in self.pl_all_rank_global_token_count])
-        
-        log.print_time(self.pl_record_fowd_time,fowd=True)
-        log.print_time(self.pl_record_bawd_time,fowd=False)
+        self.itr+=1
+        # log.print_time(self.pl_record_fowd_time,fowd=True)
+        # log.print_time(self.pl_record_bawd_time,fowd=False)
 
         # update keep_models
         self._cnt_down_keep_models()
@@ -328,7 +332,7 @@ class magi_runtime():
             log.print_policy_tensor(f'rank:{self.rank} pl_send:{self.pl_send} pl_receive:{self.pl_receive} global_pl_keep:{self.global_pl_keep}')
         elif self.itr%self.policy_interval==1:
             self._init_send_receive_models()
-            
-        self.itr+=1
+        
+        self.all_rank_global_token_deque.appendleft([None] * self.num_layers)
         self.reset_layer()
         
