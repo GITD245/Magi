@@ -1,5 +1,6 @@
 import torch
 import os
+import numpy as np
 
 PRINT_RANK=0
 PRINT_TIME=1
@@ -21,7 +22,7 @@ def init_log(runtime):
     MAGI_PROFILER=runtime.magi_profile_flag
     torch.set_printoptions(linewidth=1000)
 
-    FILE_NAME_TAIL=f"gate-{runtime.gate}_-ws_{runtime.world_size}_layer-{runtime.num_layers}_bs-{runtime.global_batch_size}_topk-{runtime.topk}_ep-{runtime.num_experts}_hidden-{runtime.d_model}.log"
+    FILE_NAME_TAIL=f"gate-{runtime.gate}_ws-{runtime.world_size}_layer-{runtime.num_layers}_bs-{runtime.global_batch_size}_topk-{runtime.topk}_sq-{runtime.seq_length}_ep-{runtime.num_experts}_hidden-{runtime.d_model}.log"
 
     if runtime.rank==runtime.world_size-1 and os.path.exists(f"logs/{runtime.model}/token_count_{FILE_NAME_TAIL}"):
             os.remove(f"logs/{runtime.model}/token_count_{FILE_NAME_TAIL}")
@@ -81,7 +82,9 @@ def save_global_token_log(runtime,all_global_expert_count):
 def save_or_token(runtime,receive_token,origin_token): 
     if SAVE_OR_TOKEN and runtime.rank==runtime.world_size-1:
         with open(f"logs/{runtime.model}/or_token_count_{FILE_NAME_TAIL}",'a') as f:
-            f.write(f"itr:{runtime.itr} layer:{runtime.layer} recv_rate:{sum(receive_token)/runtime.total_input_size:.2f} recv_token:{receive_token}\n")
+            avg=sum(receive_token)/len(receive_token)
+            avg_recieve_token=[x-avg for x in receive_token]
+            f.write(f"itr:{runtime.itr} layer:{runtime.layer} recv_rate:{sum(receive_token)/runtime.total_input_size:.2f} var:{np.var(receive_token)} avg_var:{np.var(avg_recieve_token)} recv_token:{receive_token}\n")
 
 def print_policy_tensor(msg):
     if PRINT_POLICY_TENSOR:

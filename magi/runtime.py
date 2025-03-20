@@ -25,6 +25,7 @@ class magi_runtime():
         self.topk=args.top_k
         self.global_batch_size=args.global_batch_size
         self.total_input_size=args.seq_length*args.micro_batch_size*args.top_k*args.data_parallel_size
+        self.seq_length=args.seq_length
         self.gate=args.balance_strategy
 
         self.magi_profile_flag=args.magi_profile_flag
