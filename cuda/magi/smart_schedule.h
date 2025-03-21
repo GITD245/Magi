@@ -52,10 +52,10 @@ void exchangeWith(const scalar_t *sendbuf, size_t sendcount, int t_send, scalar_
   int gidx_recv = ei * world_size + rank_recv; \
   int idx_self = ei + rank * num_experts;
 
-bool is_global_keep_expert_exist(long num_experts, long world_size, const int *keep_models) { // NOLINT
+bool is_global_keep_expert_exist(long expert_idx, long num_experts, long world_size, const int *keep_models) { // NOLINT
   bool global_exist_flag = false;
-  for (long j = 0; j < num_experts * world_size * world_size; ++j) {
-    if (keep_models[j] > 0) {
+  for (long i = expert_idx; i < num_experts * world_size * world_size; i += num_experts * world_size) {
+    if (keep_models[i] > 0) {
       global_exist_flag = true;
       break;
     }
@@ -837,7 +837,7 @@ void fmoe_cuda_fused_backward_impl(
   // C_MAGI_keep+reduce
   cudaEvent_t *evt_keep_reduce = new cudaEvent_t[num_experts * world_size];
   for (long i = 0, keep_expert_cnt = 0; i < world_size * num_experts; ++i) {
-    if (is_global_keep_expert_exist(num_experts, world_size, keep_models)) {
+    if (is_global_keep_expert_exist(i, num_experts, world_size, keep_models)) {
       if (keep_models[num_experts * world_size * rank + i] > 0) {
         long offset = local_ptr[i];
         long micro_batch_size = local_expert_count[i];
@@ -1013,7 +1013,7 @@ void fmoe_cuda_fused_backward_impl(
         cudaEventElapsedTime(&milliseconds, magi_reduce_start[i], evt_receive_reduce[i]);
         magi_reduce += milliseconds;
       }
-      if (is_global_keep_expert_exist(num_experts, world_size, keep_models)) {
+      if (is_global_keep_expert_exist(i, num_experts, world_size, keep_models)) {
         cudaEventSynchronize(evt_keep_reduce[i]);
         cudaEventElapsedTime(&milliseconds, keep_reduce_start[i], evt_keep_reduce[i]);
         keep_reduce += milliseconds;
@@ -1073,7 +1073,7 @@ void fmoe_cuda_fused_backward_impl(
       cudaEventDestroy(evt_receive_reduce[i]);
       cudaEventDestroy(magi_reduce_start[i]);
     }
-    if (is_global_keep_expert_exist(num_experts, world_size, keep_models)) {
+    if (is_global_keep_expert_exist(i, num_experts, world_size, keep_models)) {
       cudaEventDestroy(evt_keep_reduce[i]);
       cudaEventDestroy(keep_reduce_start[i]);
     }
