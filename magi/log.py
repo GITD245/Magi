@@ -2,7 +2,7 @@ import torch
 import os
 import numpy as np
 
-PRINT_RANK=0
+PRINT_ALL_RANK=0
 PRINT_TIME=1
 PRINT_SEND_DEL=0
 PRINT_POLICY_TENSOR=0
@@ -10,14 +10,17 @@ PRINT_POLICY_TENSOR=0
 SAVE_ALL_GLOBAL_TOKEN_LOG=1
 SAVE_OR_TOKEN=1
 
+PRINT_RANK=None
 RANK=None
 MAGI_PROFILER=0
 FILE_NAME_TAIL=None
 
 def init_log(runtime):
+    global PRINT_RANK
     global RANK
     global MAGI_PROFILER
     global FILE_NAME_TAIL
+    PRINT_RANK=runtime.world_size-1
     RANK=runtime.rank
     MAGI_PROFILER=runtime.magi_profile_flag
     torch.set_printoptions(linewidth=1000)
@@ -88,7 +91,6 @@ def save_or_token(runtime,receive_token,origin_token):
 
 def print_policy_tensor(msg):
     if PRINT_POLICY_TENSOR:
-        if (PRINT_RANK==-1 and RANK==0) or (PRINT_RANK==RANK):
             _print(msg)
 
 def send_del_log(msg):
@@ -96,7 +98,7 @@ def send_del_log(msg):
         _print(msg)
 
 def _print(msg):
-    if PRINT_RANK==-1:
+    if PRINT_ALL_RANK:
         print(msg)
     elif PRINT_RANK==RANK:
         print(f"{msg}")
