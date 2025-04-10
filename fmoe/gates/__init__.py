@@ -8,5 +8,6 @@ from .noisy_gate import NoisyGate
 from .gshard_gate import GShardGate
 from .switch_gate import SwitchGate
 from .dc_gate import DCGate
+from .aux_gate import AuxGate
 
 from .swipe_gate import SwipeGate

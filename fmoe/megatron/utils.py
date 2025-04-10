@@ -14,7 +14,7 @@ def add_fmoe_args(parser):
         group.add_argument("--fmoe-num-experts", type=int, default=None,help='Number of expert on each worker')
     group.add_argument("--top-k", type=int, default=2)
     group.add_argument("--balance-loss-weight", type=float, default=1)
-    group.add_argument("--balance-strategy", type=str,choices = ['noisy','gshard','switch','swipe','naive'], default=None)
+    group.add_argument("--balance-strategy", type=str,choices = ['noisy','gshard','switch','swipe','naive','aux'], default=None)
     group.add_argument("--hidden-hidden-size", type=int, default=None)
 
     return parser
