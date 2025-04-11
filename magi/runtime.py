@@ -83,7 +83,7 @@ class magi_runtime():
 
     def init_janus(self):
         self.window_size=1
-        self.model_keep_time=0
+        self.model_keep_time=1
         self.policy_interval=1
         self.proxy_expert_nums=self.num_layers*self.num_experts*self.world_size
     # def record_local_expert_count(self,local_expert_count):
