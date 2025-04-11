@@ -25,7 +25,7 @@ def init_log(runtime):
     MAGI_PROFILER=runtime.magi_profile_flag
     torch.set_printoptions(linewidth=10000000)
 
-    FILE_NAME_TAIL=f"{runtime.model}_gate-{runtime.gate}_ws-{runtime.world_size}_layer-{runtime.num_layers}_bs-{runtime.global_batch_size}_topk-{runtime.topk}_sq-{runtime.seq_length}_ep-{runtime.num_experts}_hidden-{runtime.d_model}.log"
+    FILE_NAME_TAIL=f"{runtime.model}_gate-{runtime.gate}_ws-{runtime.world_size}_layer-{runtime.num_layers}_bs-{runtime.global_batch_size}_topk-{runtime.topk}_sq-{runtime.seq_length}_ep-{runtime.num_experts}_hidden-{runtime.d_model}_{runtime.model}.log"
 
     if runtime.rank==runtime.world_size-1 and os.path.exists(f"logs/{runtime.model}/token_count_{FILE_NAME_TAIL}"):
             os.remove(f"logs/{runtime.model}/token_count_{FILE_NAME_TAIL}")
