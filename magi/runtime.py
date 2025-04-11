@@ -70,12 +70,12 @@ class magi_runtime():
         self.itr=0
         self.layer=0
         
+        if args.janus:
+            self.init_janus()
         policy.init_policy(self.world_size,self.num_experts,self.num_layers,self.model_keep_time,self.proxy_expert_nums)
         log.init_log(self)
         self.magi_expert=magi_experts.magi_expert(self)
         self.janus=args.janus
-        if args.janus:
-            self.init_janus()
 
     def set_eval(self,eval_flag):
         self._init_send_receive_models()
