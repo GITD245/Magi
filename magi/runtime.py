@@ -11,9 +11,9 @@ class magi_runtime():
     def __init__(self,args):
 
         # policy_interval<model_keep_time<2*policy_interval
-        self.model_keep_time=12
+        self.model_keep_time=13
         self.window_size=10
-        self.policy_interval=5
+        self.policy_interval=10
         self.proxy_expert_nums=args.num_layers*args.fmoe_num_experts*args.data_parallel_size//4
         
         self.model=args.magi_model
@@ -73,11 +73,19 @@ class magi_runtime():
         policy.init_policy(self.world_size,self.num_experts,self.num_layers,self.model_keep_time,self.proxy_expert_nums)
         log.init_log(self)
         self.magi_expert=magi_experts.magi_expert(self)
+        self.janus=args.janus
+        if args.janus:
+            self.init_janus()
 
     def set_eval(self,eval_flag):
         self._init_send_receive_models()
         self.eval=eval_flag
 
+    def init_janus(self):
+        self.window_size=1
+        self.model_keep_time=0
+        self.policy_interval=1
+        self.proxy_expert_nums=self.num_layers*self.num_experts*self.world_size
     # def record_local_expert_count(self,local_expert_count):
     #     if not self.eval:
     #         self.pl_local_token_count[self.layer]=local_expert_count

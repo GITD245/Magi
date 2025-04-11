@@ -136,6 +136,7 @@ class MoEForward(Function):
         # pop_fn = lambda global_expert_idx: expert_utils.pop_expert_params(experts[global_expert_idx])
 
         def collect_fn(global_expert_idx,magi_flag,receive_or_keep):
+            return
             if receive_or_keep==0:
                 receive_grads[global_expert_idx]=local_input_buf.new_zeros(ctx.expert_size)
                 if magi_flag:
@@ -152,6 +153,7 @@ class MoEForward(Function):
 
 
         def set_grad_fn(global_expert_idx,receive_or_keep_or_send):
+            return
             if receive_or_keep_or_send==0:
                 expert_utils.set_grads(experts[magi_expert.get_magi_expert_idx(global_expert_idx)], receive_grads[global_expert_idx]) 
             elif receive_or_keep_or_send==1:

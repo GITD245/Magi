@@ -103,33 +103,69 @@ def _set_boradcast_expert(layer,boradcast_expert_idx,pl_send,pl_receive,global_p
     log.send_del_log(f'\nRANK {boradcast_expert_idx//NUM_EXPERTS} send expert {boradcast_expert_idx} to all rank on LAYER {layer}')
     _check_send_receive_keep(layer,boradcast_expert_idx,pl_send,pl_receive,global_pl_keep)
 
+def _gen_double_receive_rank_idx_list(runtime,layer,rank_idx,expert_idx):
+    keep_model_nums=runtime.get_global_keep_models_nums(layer,expert_idx)
+    receive_rank_interval=max(WORLD_SIZE//(keep_model_nums*2),1)
+    receive_rank_idx_list=[(x+rank_idx)%WORLD_SIZE for x in range(0, WORLD_SIZE) if x % receive_rank_interval== 0]
+    return receive_rank_idx_list
+
+def _caculate_P_l(runtime,layer,sorted_layer_receive_token,sorted_layer_expert_idx):
+    P_l=list()
+    oterh_token_count=sum(sorted_layer_receive_token)
+    P_token_count=0
+    p_max=-1
+    s_l=0
+    for i in range(len(sorted_layer_receive_token)):
+        P_token_count+=sorted_layer_receive_token[i]
+        oterh_token_count-=sorted_layer_receive_token[i]
+        if oterh_token_count==0:
+            break
+        p=(P_token_count/(len(P_l)+1))/(oterh_token_count/(WORLD_SIZE*NUM_EXPERTS-len(P_l)-1))
+        if p>=p_max:
+            p_max=p
+            P_l.append(sorted_layer_expert_idx[i])
+            s_l+=runtime.get_global_keep_models_nums(layer,sorted_layer_expert_idx[i])
+        else:
+            break
+    return P_l,s_l
+
 def policy(runtime,pl_send,pl_receive):
     if runtime.magi_no_policy:
         return
-    receive_token=list()
     all_receive_token=list()
+    pl_all_receive_token=list()
     for i in range(NUM_LAYERS):
         # MAGI_TODO:change 10 to a variable
         _,receive_token=runtime.lg_token_to_or_token(i)
         all_receive_token.extend(receive_token)
+        pl_all_receive_token.append(receive_token)
     sorted_expert_idx = sorted(range(len(all_receive_token)), key=lambda k: all_receive_token[k], reverse=True)
 
+    if runtime.janus:
     # BASIC POLICY 1 RANKING BROADCAST
-    # for i in range(PROXY_EXPERT_NUMS):
-    #     expert_idx=sorted_expert_idx[i]%(WORLD_SIZE*NUM_EXPERTS)
-    #     layer=sorted_expert_idx[i]//(WORLD_SIZE*NUM_EXPERTS)
-    #     _set_boradcast_expert(layer,expert_idx,pl_send,pl_receive,runtime.global_pl_keep)
+        for i in range(PROXY_EXPERT_NUMS):
+            expert_idx=sorted_expert_idx[i]%(WORLD_SIZE*NUM_EXPERTS)
+            layer=sorted_expert_idx[i]//(WORLD_SIZE*NUM_EXPERTS)
+            _set_boradcast_expert(layer,expert_idx,pl_send,pl_receive,runtime.global_pl_keep)
+    else:
+        # BASIC POLICY 2 RANKING DOUBLE
+        # for i in range(PROXY_EXPERT_NUMS):
+        #     expert_idx=sorted_expert_idx[i]%(WORLD_SIZE*NUM_EXPERTS)
+        #     layer=sorted_expert_idx[i]//(WORLD_SIZE*NUM_EXPERTS)
+        #     rank_idx=expert_idx//NUM_EXPERTS
+        #     receive_rank_idx_list=_gen_double_receive_rank_idx_list(runtime,layer,rank_idx,expert_idx)
+        #     _set_double_expert(layer,expert_idx,receive_rank_idx_list,pl_send,pl_receive,runtime.global_pl_keep)
 
-    # BASIC POLICY 2 RANKING DOUBLE
-    for i in range(PROXY_EXPERT_NUMS):
-        expert_idx=sorted_expert_idx[i]%(WORLD_SIZE*NUM_EXPERTS)
-        layer=sorted_expert_idx[i]//(WORLD_SIZE*NUM_EXPERTS)
-        rank_idx=expert_idx//NUM_EXPERTS
-        keep_model_nums=runtime.get_global_keep_models_nums(layer,expert_idx)
-        receive_rank_interval=max(WORLD_SIZE//(keep_model_nums*2),1)
-        receive_rank_idx_list=[(x+rank_idx)%WORLD_SIZE for x in range(0, WORLD_SIZE) if x % receive_rank_interval== 0]
-        _set_double_expert(layer,expert_idx,receive_rank_idx_list,pl_send,pl_receive,runtime.global_pl_keep)
-
+        # POLICY 3 POPULARITY
+        for layer in range(NUM_LAYERS):
+            sorted_layer_receive_token=sorted(pl_all_receive_token[layer], reverse=True)
+            sorted_layer_expert_idx=sorted(range(len(pl_all_receive_token[layer])), key=lambda k: pl_all_receive_token[layer][k], reverse=True)
+            P_l,s_l=_caculate_P_l(runtime,layer,sorted_layer_receive_token,sorted_layer_expert_idx)
+            for expert_idx in P_l:
+                rank_idx=expert_idx//NUM_EXPERTS
+                receive_rank_idx_list=_gen_double_receive_rank_idx_list(runtime,layer,rank_idx,expert_idx)
+                _set_double_expert(layer,expert_idx,receive_rank_idx_list,pl_send,pl_receive,runtime.global_pl_keep)
+        
 def using_policy(runtime):
     pl_send=torch.zeros(NUM_LAYERS,WORLD_SIZE*NUM_EXPERTS, dtype=torch.bool,device=torch.cuda.current_device())
     pl_receive=torch.zeros(NUM_LAYERS,WORLD_SIZE*NUM_EXPERTS*WORLD_SIZE, dtype=torch.bool,device=torch.cuda.current_device())
