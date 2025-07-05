@@ -79,7 +79,7 @@ def _fmoe_general_global_forward(inp, gate, expert_fn, num_expert, world_size, *
 
 
 fmoe_magi_schedule = True
-from .magi.schedule import _fmoe_general_global_forward
+from .magi_schedule.schedule import _fmoe_general_global_forward
 
 
 class FMoE(nn.Module):

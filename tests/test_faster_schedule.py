@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from fmoe.functions import ensure_comm
 from tests.test_ddp import _ensure_initialized, _run_distributed
 from tests.test_numerical import _assert_numerical
-from fmoe.magi.schedule import _fmoe_general_global_forward as smart_fwd
+from fmoe.magi_schedule.schedule import _fmoe_general_global_forward as smart_fwd
 from fmoe.layers import _fmoe_general_global_forward as naive_fwd
 
 

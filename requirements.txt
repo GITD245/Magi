@@ -1,4 +1,8 @@
-torch
+protobuf==3.20.1
+six
+regex
 numpy
 ninja
 dm-tree
+packaging
+setuptools>=49.4.0

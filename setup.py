@@ -48,7 +48,7 @@ if __name__ == '__main__':
         author_email='hja20@mails.tsinghua.edu.cn,nieyuntao@hust.edu.cn',
         license='Apache-2',
         url='https://github.com/laekov/fastmoe,https://github.com/GITD245/Magi',
-        packages=['fmoe', 'fmoe.megatron', 'fmoe.gates', 'fmoe.magi'],
+        packages=['fmoe', 'fmoe.megatron', 'fmoe.gates', 'fmoe.magi_schedule', 'magi', 'magi.megatron'],
         ext_modules=[
             CUDAExtension(
                 name='fmoe_cuda', 
