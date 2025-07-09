@@ -25,13 +25,13 @@ def init_log(runtime):
     MAGI_PROFILER=runtime.magi_profile_flag
     torch.set_printoptions(linewidth=10000000)
 
-    FILE_NAME_TAIL=f"{runtime.model}_{runtime.model}_gate-{runtime.gate}_ws-{runtime.world_size}_layer-{runtime.num_layers}_bs-{runtime.global_batch_size}_topk-{runtime.topk}_sq-{runtime.seq_length}_ep-{runtime.num_experts}_hidden-{runtime.d_model}.log"
+    FILE_NAME_TAIL=f"gate-{runtime.gate}_ws-{runtime.world_size}_layer-{runtime.num_layers}_bs-{runtime.global_batch_size}_topk-{runtime.topk}_sq-{runtime.seq_length}_ep-{runtime.num_experts}_hidden-{runtime.d_model}.log"
 
-    if runtime.rank==runtime.world_size-1 and os.path.exists(f"logs/{runtime.model}/token_count_{FILE_NAME_TAIL}"):
-            os.remove(f"logs/{runtime.model}/token_count_{FILE_NAME_TAIL}")
+    if runtime.rank==runtime.world_size-1 and os.path.exists(f"logs/{runtime.model}/{runtime.model}_GLOBALTOKENCOUNT_{FILE_NAME_TAIL}"):
+        os.remove(f"logs/{runtime.model}/{runtime.model}_GLOBALTOKENCOUNT_{FILE_NAME_TAIL}")
 
-    if runtime.rank==runtime.world_size-1 and os.path.exists(f"logs/{runtime.model}/or_token_count_{FILE_NAME_TAIL}"):
-            os.remove(f"logs/{runtime.model}/or_token_count_{FILE_NAME_TAIL}")
+    if runtime.rank==runtime.world_size-1 and os.path.exists(f"logs/{runtime.model}/{runtime.model}_STD_{FILE_NAME_TAIL}"):
+        os.remove(f"logs/{runtime.model}/{runtime.model}_STD_{FILE_NAME_TAIL}")
 
 
 def print_time(per_itr_record_time,fowd=True,layer=-1):
@@ -79,12 +79,12 @@ def print_time(per_itr_record_time,fowd=True,layer=-1):
 
 def save_global_token_log(runtime,all_global_expert_count):
     if SAVE_ALL_GLOBAL_TOKEN_LOG and runtime.rank==runtime.world_size-1:
-        with open(f"logs/{runtime.model}/token_count_{FILE_NAME_TAIL}",'a') as f:
+        with open(f"logs/{runtime.model}/{runtime.model}_GLOBALTOKENCOUNT_{FILE_NAME_TAIL}",'a') as f:
             f.write(f"itr:{runtime.itr} layer:{runtime.layer} all_global_expert_count:{all_global_expert_count}\n")
 
 def save_or_token(runtime,receive_token,origin_token): 
     if SAVE_OR_TOKEN and runtime.rank==runtime.world_size-1:
-        with open(f"logs/{runtime.model}/or_token_count_{FILE_NAME_TAIL}",'a') as f:
+        with open(f"logs/{runtime.model}/{runtime.model}_STD_{FILE_NAME_TAIL}",'a') as f:
             avg=sum(receive_token)/len(receive_token)
             avg_recieve_token=[x-avg for x in receive_token]
             f.write(f"itr:{runtime.itr} layer:{runtime.layer} recv_rate:{sum(receive_token)/runtime.total_input_size:.2f} var:{np.var(receive_token)} avg_var:{np.var(avg_recieve_token)} recv_token:{receive_token}\n")
