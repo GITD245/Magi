@@ -11,9 +11,11 @@ class magi_runtime():
     def __init__(self,args):
 
         # policy_interval<model_keep_time<2*policy_interval
+        if args.magi_schedule_interval>0:
+            self.policy_interval=args.magi_schedule_interval
         self.model_keep_time=13
         self.window_size=10
-        self.policy_interval=10
+
         self.proxy_expert_nums=args.num_layers*args.fmoe_num_experts*args.data_parallel_size//4
         
         self.model=args.magi_model
@@ -30,7 +32,7 @@ class magi_runtime():
 
         self.magi_profile_flag=args.magi_profile_flag
         self.magi_redirect=args.magi_token_redirect_flag
-        self.magi_no_policy=args.magi_no_policy
+        self.magi_policy=args.magi_policy
 
         # pl means per layer
         # self.pl_local_token_count=[None] * self.num_layers

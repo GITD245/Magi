@@ -100,7 +100,7 @@ def save_keep_log(runtime, global_pl_keep):
 
 def print_policy_tensor(msg):
     if PRINT_POLICY_TENSOR:
-            _print(msg)
+        _print(msg)
 
 def send_del_log(msg):
     if PRINT_SEND_DEL:

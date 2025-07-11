@@ -130,7 +130,8 @@ def _caculate_P_l(runtime,layer,sorted_layer_receive_token,sorted_layer_expert_i
     return P_l,s_l
 
 def policy(runtime,pl_send,pl_receive):
-    if runtime.magi_no_policy:
+    if runtime.magi_policy==0 and not runtime.janus:
+        # NO POLICY
         return
     all_receive_token=list()
     pl_all_receive_token=list()
@@ -141,21 +142,21 @@ def policy(runtime,pl_send,pl_receive):
         pl_all_receive_token.append(receive_token)
     sorted_expert_idx = sorted(range(len(all_receive_token)), key=lambda k: all_receive_token[k], reverse=True)
 
-    if runtime.janus:
-    # BASIC POLICY 1 RANKING BROADCAST
+    if runtime.janus or runtime.magi_policy==1:
+        # BASIC POLICY 1 RANKING BROADCAST
         for i in range(PROXY_EXPERT_NUMS):
             expert_idx=sorted_expert_idx[i]%(WORLD_SIZE*NUM_EXPERTS)
             layer=sorted_expert_idx[i]//(WORLD_SIZE*NUM_EXPERTS)
             _set_boradcast_expert(layer,expert_idx,pl_send,pl_receive,runtime.global_pl_keep)
-    else:
+    elif runtime.magi_policy==2:
         # BASIC POLICY 2 RANKING DOUBLE
-        # for i in range(PROXY_EXPERT_NUMS):
-        #     expert_idx=sorted_expert_idx[i]%(WORLD_SIZE*NUM_EXPERTS)
-        #     layer=sorted_expert_idx[i]//(WORLD_SIZE*NUM_EXPERTS)
-        #     rank_idx=expert_idx//NUM_EXPERTS
-        #     receive_rank_idx_list=_gen_double_receive_rank_idx_list(runtime,layer,rank_idx,expert_idx)
-        #     _set_double_expert(layer,expert_idx,receive_rank_idx_list,pl_send,pl_receive,runtime.global_pl_keep)
-
+        for i in range(PROXY_EXPERT_NUMS):
+            expert_idx=sorted_expert_idx[i]%(WORLD_SIZE*NUM_EXPERTS)
+            layer=sorted_expert_idx[i]//(WORLD_SIZE*NUM_EXPERTS)
+            rank_idx=expert_idx//NUM_EXPERTS
+            receive_rank_idx_list=_gen_double_receive_rank_idx_list(runtime,layer,rank_idx,expert_idx)
+            _set_double_expert(layer,expert_idx,receive_rank_idx_list,pl_send,pl_receive,runtime.global_pl_keep)
+    elif runtime.magi_policy==3:
         # POLICY 3 POPULARITY
         for layer in range(NUM_LAYERS):
             sorted_layer_receive_token=sorted(pl_all_receive_token[layer], reverse=True)
@@ -165,6 +166,8 @@ def policy(runtime,pl_send,pl_receive):
                 rank_idx=expert_idx//NUM_EXPERTS
                 receive_rank_idx_list=_gen_double_receive_rank_idx_list(runtime,layer,rank_idx,expert_idx)
                 _set_double_expert(layer,expert_idx,receive_rank_idx_list,pl_send,pl_receive,runtime.global_pl_keep)
+    else:
+        return
         
 def using_policy(runtime):
     pl_send=torch.zeros(NUM_LAYERS,WORLD_SIZE*NUM_EXPERTS, dtype=torch.bool,device=torch.cuda.current_device())
