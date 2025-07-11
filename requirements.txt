@@ -7,3 +7,7 @@ dm-tree
 packaging
 setuptools>=49.4.0
 pybind11
+matplotlib
+scipy
+statsmodels
+shapely

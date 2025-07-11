@@ -100,7 +100,7 @@ class magi_runtime():
             self.all_rank_global_token_deque[0][self.layer]=all_rank_global_token_count
             log.save_global_token_log(self,all_rank_global_token_count)
 
-    def record_fowd_layer_time(self,stime,ctime,ctime_wait,rtime,rtime_wait,magi_stime,magi_ctime,magi_ctime_wait,keep_ctime):
+    def record_fwd_layer_time(self,stime,ctime,ctime_wait,rtime,rtime_wait,magi_stime,magi_ctime,magi_ctime_wait,keep_ctime):
         if not self.eval:
             self.pl_record_fowd_time['stime'][self.layer]=stime
             self.pl_record_fowd_time['ctime'][self.layer]=ctime
@@ -112,7 +112,7 @@ class magi_runtime():
             self.pl_record_fowd_time['magi_ctime_wait'][self.layer]=magi_ctime_wait
             self.pl_record_fowd_time['keep_ctime'][self.layer]=keep_ctime
     
-    def record_bawd_layer_time(self,stime,ctime,ctime_wait,rtime,rtime_wait,magi_ctime,magi_reduce,keep_ctime,keep_reduce,set_gradients):
+    def record_bwd_layer_time(self,stime,ctime,ctime_wait,rtime,rtime_wait,magi_ctime,magi_reduce,keep_ctime,keep_reduce,set_gradients):
         if not self.eval:
             self.pl_record_bawd_time['stime'][self.layer]=stime
             self.pl_record_bawd_time['ctime'][self.layer]=ctime
@@ -243,6 +243,7 @@ class magi_runtime():
     #     else:
     #         flag_buf[0]=False
 
+    # using local_token/global_token to calculate origin_token/receive_token
     def lg_token_to_or_token(self,layer,itr_cnt=0):
         origin_token=list()
         receive_token=list()
@@ -261,7 +262,7 @@ class magi_runtime():
             # token need to receive from other workers
             receive_token.append(sum(global_token_count[(expert_idx%self.num_experts)::self.num_experts]).item()-origin_token[-1])
         
-        log.save_or_token(self,receive_token,origin_token)
+        log.save_or_token_log(self,receive_token,origin_token)
       
         return origin_token,receive_token
     
@@ -341,6 +342,7 @@ class magi_runtime():
             log.print_policy_tensor(f'rank:{self.rank} pl_send:{self.pl_send} pl_receive:{self.pl_receive} global_pl_keep:{self.global_pl_keep}')
         elif self.itr%self.policy_interval==1:
             self._init_send_receive_models()
+        log.save_keep_log(self,self.global_pl_keep)
         
         self.all_rank_global_token_deque.appendleft([None] * self.num_layers)
         self.reset_layer()

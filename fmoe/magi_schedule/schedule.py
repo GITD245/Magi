@@ -93,7 +93,7 @@ class MoEForward(Function):
                 fwd_batch_size, redirect_batch_size,
                 ctx.expert_size, world_size,
                 magi_runtime.magi_profile_flag, magi_runtime.magi_redirect,
-                _expert_forward, magi_expert.registe_magi_expert, magi_expert.push_magi_expert, magi_runtime.record_fowd_layer_time)
+                _expert_forward, magi_expert.registe_magi_expert, magi_expert.push_magi_expert, magi_runtime.record_fwd_layer_time)
         
         out = _local_gather(local_output_buf, pos_g, out_batch_size,
                 maybe_overlap=False)
@@ -170,7 +170,7 @@ class MoEForward(Function):
                 pos_s.shape[0], fwd_batch_size, redirect_batch_size,
                 world_size,
                 ctx.magi_runtime.magi_profile_flag, ctx.magi_runtime.magi_redirect,
-                _expert_backward, collect_fn, set_grad_fn, ctx.magi_runtime.record_bawd_layer_time)
+                _expert_backward, collect_fn, set_grad_fn, ctx.magi_runtime.record_bwd_layer_time)
         grad_in = _local_gather(grad_in_buf, pos_s, inp_batch_size)
 
         return (None, None, grad_in, None, None, None,None, None, None, None, None, None, None, None, None, None, None, None, None, None)
