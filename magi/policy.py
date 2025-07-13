@@ -136,13 +136,12 @@ def policy(runtime,pl_send,pl_receive):
     all_receive_token=list()
     pl_all_receive_token=list()
     for i in range(NUM_LAYERS):
-        # MAGI_TODO:change 10 to a variable
         _,receive_token=runtime.lg_token_to_or_token(i)
         all_receive_token.extend(receive_token)
         pl_all_receive_token.append(receive_token)
     sorted_expert_idx = sorted(range(len(all_receive_token)), key=lambda k: all_receive_token[k], reverse=True)
 
-    if runtime.janus or runtime.magi_policy==1:
+    if runtime.janus or runtime.fastermoe or runtime.magi_policy==1:
         # BASIC POLICY 1 RANKING BROADCAST
         for i in range(PROXY_EXPERT_NUMS):
             expert_idx=sorted_expert_idx[i]%(WORLD_SIZE*NUM_EXPERTS)

@@ -65,19 +65,24 @@ class magi_runtime():
 
         # self.local_token_deque=deque(maxlen=self.window_size)
         # self.global_token_deque=deque(maxlen=self.window_size)
-        self.all_rank_global_token_deque=deque(maxlen=self.window_size)
-        self.all_rank_global_token_deque.appendleft([None] * self.num_layers)
 
         self.eval=False
         self.itr=0
         self.layer=0
-        
-        if args.janus:
+
+        self.janus=args.janus
+        self.fastermoe=args.fastermoe
+        if self.janus:
             self.init_janus()
+        if self.fastermoe:
+            self.init_fastermoe()
+
+        self.all_rank_global_token_deque=deque(maxlen=self.window_size)
+        self.all_rank_global_token_deque.appendleft([None] * self.num_layers)
         policy.init_policy(self.world_size,self.num_experts,self.num_layers,self.model_keep_time,self.proxy_expert_nums)
+
         log.init_log(self)
         self.magi_expert=magi_experts.magi_expert(self)
-        self.janus=args.janus
 
     def set_eval(self,eval_flag):
         self._init_send_receive_models()
@@ -87,15 +92,18 @@ class magi_runtime():
         self.window_size=1
         self.model_keep_time=1
         self.policy_interval=1
+        self.magi_redirect=False
         self.proxy_expert_nums=self.num_layers*self.num_experts*self.world_size
-    # def record_local_expert_count(self,local_expert_count):
-    #     if not self.eval:
-    #         self.pl_local_token_count[self.layer]=local_expert_count
-
-    # def record_global_expert_count(self,global_expert_count):
-    #     if not self.eval:
-    #         self.pl_global_token_count[self.layer]=global_expert_count
-    #         log.save_global_token_log(self.gate,self.layer,self.itr,global_expert_count)
+        self.magi_policy=1
+    
+    def init_fastermoe(self):
+        # naive fastermoe for test, to use real fastermoe, git checkout origin-fastmoe
+        self.window_size=1
+        self.model_keep_time=1
+        self.policy_interval=1
+        self.magi_redirect=False
+        self.proxy_expert_nums=1
+        self.magi_policy=1
     
     def record_all_rank_global_expert_count(self,all_rank_global_token_count):
         if not self.eval:
