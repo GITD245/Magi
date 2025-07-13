@@ -1,24 +1,26 @@
 import torch
-import time
 from collections import deque
 import torch.distributed as dist
 from magi import experts as magi_experts
 from magi import expert_utils
 from magi import log
 from magi import policy
+from magi.log import timer
 
 class magi_runtime():
     def __init__(self,args):
 
-        # policy_interval<model_keep_time<2*policy_interval
-        if args.magi_schedule_interval>0:
-            self.policy_interval=args.magi_schedule_interval
-        self.model_keep_time=13
-        self.window_size=10
+        self.janus=args.janus
+        self.fastermoe=args.fastermoe
+        if self.janus:
+            self.init_janus(args)
+        elif self.fastermoe:
+            self.init_fastermoe(args)
+        else:
+            self.init_magi(args)
 
-        self.proxy_expert_nums=args.num_layers*args.fmoe_num_experts*args.data_parallel_size//4
-        
-        self.model=args.magi_model
+        self.magi_profile_flag=args.magi_profile_flag
+        self.model=args.model
         self.d_model = args.hidden_size
         self.num_layers = args.num_layers
         self.num_experts = args.fmoe_num_experts
@@ -29,10 +31,6 @@ class magi_runtime():
         self.total_input_size=args.seq_length*args.micro_batch_size*args.top_k*args.data_parallel_size
         self.seq_length=args.seq_length
         self.gate=args.balance_strategy
-
-        self.magi_profile_flag=args.magi_profile_flag
-        self.magi_redirect=args.magi_token_redirect_flag
-        self.magi_policy=args.magi_policy
 
         # pl means per layer
         # self.pl_local_token_count=[None] * self.num_layers
@@ -63,24 +61,14 @@ class magi_runtime():
         self.pl_receive=torch.zeros(self.num_layers,self.world_size*self.num_experts*self.world_size, dtype=torch.bool)
         self.global_pl_keep=[torch.zeros(self.num_layers, self.world_size*self.num_experts, dtype=torch.int32) for _ in range(self.world_size)]
 
-        # self.local_token_deque=deque(maxlen=self.window_size)
-        # self.global_token_deque=deque(maxlen=self.window_size)
-
         self.eval=False
         self.itr=0
         self.layer=0
 
-        self.janus=args.janus
-        self.fastermoe=args.fastermoe
-        if self.janus:
-            self.init_janus()
-        if self.fastermoe:
-            self.init_fastermoe()
-
         self.all_rank_global_token_deque=deque(maxlen=self.window_size)
         self.all_rank_global_token_deque.appendleft([None] * self.num_layers)
-        policy.init_policy(self.world_size,self.num_experts,self.num_layers,self.model_keep_time,self.proxy_expert_nums)
 
+        policy.init_policy(self.world_size,self.num_experts,self.num_layers,self.model_keep_time)
         log.init_log(self)
         self.magi_expert=magi_experts.magi_expert(self)
 
@@ -88,21 +76,36 @@ class magi_runtime():
         self._init_send_receive_models()
         self.eval=eval_flag
 
-    def init_janus(self):
+    def init_magi(self,args):
+        self.window_size=10
+        if args.magi_schedule_interval>0:
+            # policy_interval<model_keep_time<2*policy_interval
+            self.policy_interval=args.magi_schedule_interval
+            self.model_keep_time=int(self.policy_interval*1.3)
+        else:
+            # MAGI_TODO:dynamic policy_interval
+            pass
+        self.magi_redirect=args.magi_token_redirect_flag
+        self.proxy_expert_ratio=args.magi_proxy_expert_ratio
+        # proxy_expert_nums only used on BASIC POLICY 1 and 2
+        self.proxy_expert_nums=int(args.num_layers*args.fmoe_num_experts*args.data_parallel_size*args.magi_proxy_expert_ratio)
+        self.magi_policy=args.magi_policy
+
+    def init_janus(self,args):
         self.window_size=1
-        self.model_keep_time=1
         self.policy_interval=1
+        self.model_keep_time=1
         self.magi_redirect=False
-        self.proxy_expert_nums=self.num_layers*self.num_experts*self.world_size
+        self.proxy_expert_nums=args.num_layers*args.fmoe_num_experts*args.data_parallel_size
         self.magi_policy=1
     
-    def init_fastermoe(self):
+    def init_fastermoe(self,args):
         # naive fastermoe for test, to use real fastermoe, git checkout origin-fastmoe
         self.window_size=1
-        self.model_keep_time=1
         self.policy_interval=1
+        self.model_keep_time=1
         self.magi_redirect=False
-        self.proxy_expert_nums=1
+        self.proxy_expert_nums=args.num_layers*1
         self.magi_policy=1
     
     def record_all_rank_global_expert_count(self,all_rank_global_token_count):
@@ -215,24 +218,6 @@ class magi_runtime():
                 offset=recv_from_rank*self.num_experts+(recv_from_expert_idx%self.num_experts)
                 redirect_expert_count.append(self.all_rank_global_token_deque[0][self.layer][recv_from_expert_idx//self.num_experts*self.world_size*self.num_experts+offset].item())
         return torch.tensor(redirect_expert_count,dtype=torch.long)
-    
-    # def get_redirect_token_receive_from_which_rank(self,layer=-1):
-    #     if layer==-1:
-    #         layer=self.layer
-    #     res=torch.zeros(self.num_experts*self.world_size*self.world_size, dtype=torch.bool)
-    #     if not self.magi_redirect:
-    #         return res
-        
-    #     keep_models=self.global_pl_keep[self.rank][layer]
-    #     for expert_idx in range(self.world_size*self.num_experts):
-    #         keep_models_nums=self.get_global_keep_models_nums(layer,expert_idx)
-    #         if keep_models[expert_idx]>0: 
-    #             # this rank has expert_idx's keep_models
-    #             keep_rank_interval=self.world_size//keep_models_nums
-    #             keep_rank=self.rank//keep_rank_interval*keep_rank_interval
-    #             res[expert_idx*self.world_size+keep_rank:expert_idx*self.world_size+keep_rank+keep_rank_interval]=True
-    #     # res[expert_idx*self.world_size+rank_idx]=True means this rank should receive expert_idx's token from rank_idx
-    #     return res
                     
     # def is_magi_expert_exist(self,flag_buf,rank_idx,expert_idx,layer=-1):
     #     if layer==-1:

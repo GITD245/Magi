@@ -1,6 +1,7 @@
 import torch
 import os
 import numpy as np
+import time
 
 PRINT_ALL_RANK=0
 PRINT_TIME=1
@@ -14,28 +15,35 @@ SAVE_KEEP_LOG=1
 PRINT_RANK=None
 RANK=None
 MAGI_PROFILER=0
+POLICY=None
 FILE_NAME_TAIL=None
 
 def init_log(runtime):
     global PRINT_RANK
     global RANK
     global MAGI_PROFILER
+    global POLICY
     global FILE_NAME_TAIL
     PRINT_RANK=runtime.world_size-1
     RANK=runtime.rank
     MAGI_PROFILER=runtime.magi_profile_flag
     torch.set_printoptions(linewidth=99999999,threshold=99999999)
-
+    if runtime.janus:
+        POLICY="JANUS"
+    elif runtime.fastermoe:
+        POLICY="SFASTER"
+    else:
+        POLICY=f"MAGI-{runtime.magi_policy}-{runtime.policy_interval}-{runtime.proxy_expert_ratio}"
     FILE_NAME_TAIL=f"gate-{runtime.gate}_ws-{runtime.world_size}_layer-{runtime.num_layers}_bs-{runtime.global_batch_size}_topk-{runtime.topk}_sq-{runtime.seq_length}_ep-{runtime.num_experts}_hidden-{runtime.d_model}.log"
 
-    if runtime.rank==runtime.world_size-1 and os.path.exists(f"logs/{runtime.model}/{runtime.model}_GLOBAL_{FILE_NAME_TAIL}"):
-        os.remove(f"logs/{runtime.model}/{runtime.model}_GLOBAL_{FILE_NAME_TAIL}")
+    if runtime.rank==runtime.world_size-1 and os.path.exists(f"logs/{runtime.model}/{runtime.model}_{POLICY}_GLOBAL_{FILE_NAME_TAIL}"):
+        os.remove(f"logs/{runtime.model}/{runtime.model}_{POLICY}_GLOBAL_{FILE_NAME_TAIL}")
 
-    if runtime.rank==runtime.world_size-1 and os.path.exists(f"logs/{runtime.model}/{runtime.model}_STD_{FILE_NAME_TAIL}"):
-        os.remove(f"logs/{runtime.model}/{runtime.model}_STD_{FILE_NAME_TAIL}")
+    if runtime.rank==runtime.world_size-1 and os.path.exists(f"logs/{runtime.model}/{runtime.model}_{POLICY}_STD_{FILE_NAME_TAIL}"):
+        os.remove(f"logs/{runtime.model}/{runtime.model}_{POLICY}_STD_{FILE_NAME_TAIL}")
     
-    if runtime.rank==runtime.world_size-1 and os.path.exists(f"logs/{runtime.model}/{runtime.model}_KEEP_{FILE_NAME_TAIL}"):
-        os.remove(f"logs/{runtime.model}/{runtime.model}_KEEP_{FILE_NAME_TAIL}")
+    if runtime.rank==runtime.world_size-1 and os.path.exists(f"logs/{runtime.model}/{runtime.model}_{POLICY}_KEEP_{FILE_NAME_TAIL}"):
+        os.remove(f"logs/{runtime.model}/{runtime.model}_{POLICY}_KEEP_{FILE_NAME_TAIL}")
 
 
 def print_time(per_itr_record_time,fowd=True,layer=-1):
@@ -83,20 +91,29 @@ def print_time(per_itr_record_time,fowd=True,layer=-1):
 
 def save_global_token_log(runtime,all_global_expert_count):
     if SAVE_ALL_GLOBAL_TOKEN_LOG and runtime.rank==runtime.world_size-1:
-        with open(f"logs/{runtime.model}/{runtime.model}_GLOBAL_{FILE_NAME_TAIL}",'a') as f:
+        with open(f"logs/{runtime.model}/{runtime.model}_{POLICY}_GLOBAL_{FILE_NAME_TAIL}",'a') as f:
             f.write(f"itr:{runtime.itr} layer:{runtime.layer} all_global_expert_count:{all_global_expert_count}\n")
 
 def save_or_token_log(runtime,receive_token,origin_token): 
     if SAVE_STD_LOG and runtime.rank==runtime.world_size-1:
-        with open(f"logs/{runtime.model}/{runtime.model}_STD_{FILE_NAME_TAIL}",'a') as f:
+        with open(f"logs/{runtime.model}/{runtime.model}_{POLICY}_STD_{FILE_NAME_TAIL}",'a') as f:
             f.write(f"itr:{runtime.itr} layer:{runtime.layer} total_input:{runtime.total_input_size} recv_avg:{np.average(receive_token):.2f} recv_std:{np.std(receive_token, ddof=1):.2f} recv_token:{receive_token} origin_token:{origin_token}\n")
 
 def save_keep_log(runtime, global_pl_keep):
     if SAVE_KEEP_LOG and runtime.rank==runtime.world_size-1:
-        with open(f"logs/{runtime.model}/{runtime.model}_KEEP_{FILE_NAME_TAIL}",'a') as f:
+        with open(f"logs/{runtime.model}/{runtime.model}_{POLICY}_KEEP_{FILE_NAME_TAIL}",'a') as f:
             global_keep=torch.cat(global_pl_keep,dim=1)
             for layer in range(runtime.num_layers):
                 f.write(f"itr:{runtime.itr} layer:{layer} keep:{global_keep[layer]}\n")
+
+def timer(func):
+    def wrapper(*args, **kwargs):
+        start = time.time()
+        result = func(*args, **kwargs)
+        duration = time.time() - start
+        print(f"rank:{RANK} func:{func.__name__} use {duration*1000:.2f}ms")
+        return result
+    return wrapper
 
 def print_policy_tensor(msg):
     if PRINT_POLICY_TENSOR:

@@ -79,7 +79,7 @@ void computePtrs(long num_experts, long rank, long world_size, // NOLINT
     auto global_expert_idx = rank * num_experts + expert_idx;
     auto gp_idx = expert_idx * world_size + worker_idx;
 
-    // if local model wasn't become a magi_model or tokens weren't redirected, receive global tokens
+    // if local expert wasn't become a magi_expert or tokens weren't redirected, receive global tokens
     if (receive_models[global_expert_idx * world_size + worker_idx] ||
         (keep_models[num_experts * world_size * worker_idx + global_expert_idx] > 0) ||
         (re_unreceive[global_expert_idx * world_size + worker_idx])) {

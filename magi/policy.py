@@ -7,19 +7,16 @@ WORLD_SIZE=0
 NUM_EXPERTS=0
 NUM_LAYERS=0
 MODEL_KEEP_TIME=0
-PROXY_EXPERT_NUMS=0
 
-def init_policy(world_size,num_experts,num_layers,model_keep_time,proxy_expert_nums):
+def init_policy(world_size,num_experts,num_layers,model_keep_time):
     global WORLD_SIZE
     global NUM_EXPERTS
     global NUM_LAYERS
     global MODEL_KEEP_TIME
-    global PROXY_EXPERT_NUMS
     WORLD_SIZE=world_size
     NUM_EXPERTS=num_experts
     NUM_LAYERS=num_layers
     MODEL_KEEP_TIME=model_keep_time
-    PROXY_EXPERT_NUMS=proxy_expert_nums
 
 def _receive_or_not(layer_idx,expert_idx,rank_idx,pl_send,pl_receive):
     # should this rank receive this expert
@@ -130,7 +127,7 @@ def _caculate_P_l(runtime,layer,sorted_layer_receive_token,sorted_layer_expert_i
     return P_l,s_l
 
 def policy(runtime,pl_send,pl_receive):
-    if runtime.magi_policy==0 and not runtime.janus:
+    if runtime.magi_policy==0:
         # NO POLICY
         return
     all_receive_token=list()
@@ -143,13 +140,13 @@ def policy(runtime,pl_send,pl_receive):
 
     if runtime.janus or runtime.fastermoe or runtime.magi_policy==1:
         # BASIC POLICY 1 RANKING BROADCAST
-        for i in range(PROXY_EXPERT_NUMS):
+        for i in range(runtime.proxy_expert_nums):
             expert_idx=sorted_expert_idx[i]%(WORLD_SIZE*NUM_EXPERTS)
             layer=sorted_expert_idx[i]//(WORLD_SIZE*NUM_EXPERTS)
             _set_boradcast_expert(layer,expert_idx,pl_send,pl_receive,runtime.global_pl_keep)
     elif runtime.magi_policy==2:
         # BASIC POLICY 2 RANKING DOUBLE
-        for i in range(PROXY_EXPERT_NUMS):
+        for i in range(runtime.proxy_expert_nums):
             expert_idx=sorted_expert_idx[i]%(WORLD_SIZE*NUM_EXPERTS)
             layer=sorted_expert_idx[i]//(WORLD_SIZE*NUM_EXPERTS)
             rank_idx=expert_idx//NUM_EXPERTS
