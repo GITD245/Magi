@@ -33,7 +33,7 @@ def init_log(runtime):
     elif runtime.fastermoe:
         POLICY="SFASTER"
     else:
-        POLICY=f"MAGI-{runtime.magi_policy}-{runtime.policy_interval}-{runtime.proxy_expert_ratio}"
+        POLICY=f"MAGI-{runtime.magi_policy}-{runtime.policy_interval}-{runtime.proxy_expert_ratio if runtime.proxy_expert_ratio!=1.0 else '1'}"
     FILE_NAME_TAIL=f"gate-{runtime.gate}_ws-{runtime.world_size}_layer-{runtime.num_layers}_bs-{runtime.global_batch_size}_topk-{runtime.topk}_sq-{runtime.seq_length}_ep-{runtime.num_experts}_hidden-{runtime.d_model}.log"
 
     if runtime.rank==runtime.world_size-1 and os.path.exists(f"logs/{runtime.model}/{runtime.model}_{POLICY}_GLOBAL_{FILE_NAME_TAIL}"):

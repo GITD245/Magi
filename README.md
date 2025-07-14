@@ -26,12 +26,6 @@ cd /workspace/megatron-3.0.2
 bash examples/pretrain_gpt_distributed_magi.sh
 ```
 
-nsys
-
-```bash
-nsys profile --output=my_report --stats=true --trace=cuda,cublas,cudnn examples/pretrain_gpt_distributed_magi.sh
-```
-
 ### virtualenv安装
 
 创建虚拟环境
@@ -76,4 +70,18 @@ python setup.py install --cuda_ext
 cd /workspace/megatron-3.0.2
 # 加快编译速度 export MAX_JOBS=36
 bash examples/pretrain_gpt_distributed_magi.sh
+```
+
+### Other
+
+FasterMoE
+```bash
+git checkout origin-fastmoe
+FMOE_FASTER_SCHEDULE_ENABLE=1 FMOE_FASTER_SHADOW_ENABLE=1 bash examples/pretrain_gpt_distributed_faster.sh
+```
+
+nsys
+
+```bash
+nsys profile --output=my_report --stats=true --trace=cuda,cublas,cudnn examples/pretrain_gpt_distributed_magi.sh
 ```
