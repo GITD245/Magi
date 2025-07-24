@@ -53,7 +53,8 @@ python setup.py install
 ```bash
 git clone https://github.com/NVIDIA/apex.git
 cd /workspace/apex
-# 可能需要注释掉setup.py中一段代码
+# 可能需要注释掉setup.py中一段代码  需要GCC 9或更高版本
+# 加快编译速度 export MAX_JOBS=36
 python setup.py install --cuda_ext
 ```
 
@@ -62,9 +63,14 @@ python setup.py install --cuda_ext
 可能会遇到这个问题：https://github.com/NVIDIA/Megatron-LM/issues/143
 将python3-config替换为绝对路径可解决
 
-第一次运行自动开始编译 编译卡住时删除 megatron-3.0.2/megatron/fused_kernels/build 文件夹重新编译
+```bash
+# megatron/data/Makefile
 
-目前遇到过因NCCL原因编译hang住问题，尝试重启容器/开发机解决
+# LIBEXT = $(shell python3-config --extension-suffix)
+LIBEXT = $(shell /usr/bin/python3.10-config --extension-suffix)
+```
+
+第一次运行自动开始编译 编译卡住时删除 megatron-3.0.2/megatron/fused_kernels/build 文件夹重新编译
 
 ```bash
 cd /workspace/megatron-3.0.2
@@ -85,3 +91,4 @@ nsys
 ```bash
 nsys profile --output=my_report --stats=true --trace=cuda,cublas,cudnn examples/pretrain_gpt_distributed_magi.sh
 ```
+目前遇到过因NCCL原因编译hang住问题，尝试重启容器/开发机解决
