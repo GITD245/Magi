@@ -2,11 +2,11 @@
 
 使用docker_manager安装 nvcr.io/nvidia/pytorch:24.03-py3
 
-```baso
-git config --local user.name "GITD245"
-git config --local user.email "2456388197@qq.com"
+```bash
 git clone https://github.com/GITD245/Magi.git
 git clone https://github.com/GITD245/megatron-3.0.2
+git config --local user.name "GITD245"
+git config --local user.email "2456388197@qq.com"
 ```
 
 Magi 初始化
@@ -32,14 +32,14 @@ bash examples/pretrain_gpt_distributed_magi.sh
 
 创建虚拟环境
 
-```
+```bash
 virtualenv -p /usr/bin/python3.10 magi_env
 source magi_env/bin/activate
 
-git config --local user.name "GITD245"
-git config --local user.email "2456388197@qq.com"
 git clone https://github.com/GITD245/Magi.git
 git clone https://github.com/GITD245/megatron-3.0.2
+git config --local user.name "GITD245"
+git config --local user.email "2456388197@qq.com"
 ```
 
 Magi初始化
