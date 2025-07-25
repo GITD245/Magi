@@ -3,6 +3,8 @@
 使用docker_manager安装 nvcr.io/nvidia/pytorch:24.03-py3
 
 ```baso
+git config --local user.name "GITD245"
+git config --local user.email "2456388197@qq.com"
 git clone https://github.com/GITD245/Magi.git
 git clone https://github.com/GITD245/megatron-3.0.2
 ```
@@ -33,6 +35,9 @@ bash examples/pretrain_gpt_distributed_magi.sh
 ```
 virtualenv -p /usr/bin/python3.10 magi_env
 source magi_env/bin/activate
+
+git config --local user.name "GITD245"
+git config --local user.email "2456388197@qq.com"
 git clone https://github.com/GITD245/Magi.git
 git clone https://github.com/GITD245/megatron-3.0.2
 ```
@@ -51,8 +56,7 @@ python setup.py install
 安装apex
 
 ```bash
-git clone https://github.com/NVIDIA/apex.git
-cd /workspace/apex
+cd /workspace/megatron-3.0.2/apex
 # 可能需要注释掉setup.py中一段代码  需要GCC 9或更高版本
 # 加快编译速度 export MAX_JOBS=36
 python setup.py install --cuda_ext

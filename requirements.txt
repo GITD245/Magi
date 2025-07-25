@@ -11,3 +11,5 @@ matplotlib
 scipy
 statsmodels
 shapely
+transformers==4.44.2
+deepspeed
