@@ -90,10 +90,10 @@ git checkout origin-fastmoe
 FMOE_FASTER_SCHEDULE_ENABLE=1 FMOE_FASTER_SHADOW_ENABLE=1 bash examples/pretrain_gpt_distributed_faster.sh
 ```
 
-nsys
+nsys 在脚本中python前添加下列代码
 
 ```bash
-nsys profile --output=my_report --stats=true --trace=cuda,cublas,cudnn examples/pretrain_gpt_distributed_magi.sh
+nsys profile --output=my_report --stats true -t cuda,nvtx,cudnn,cublas --force-overwrite true \
 ```
 目前遇到过因NCCL原因编译hang住问题，尝试重启容器/开发机解决， 也可以尝试设置单卡编译解决
 
