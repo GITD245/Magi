@@ -95,4 +95,9 @@ nsys
 ```bash
 nsys profile --output=my_report --stats=true --trace=cuda,cublas,cudnn examples/pretrain_gpt_distributed_magi.sh
 ```
-目前遇到过因NCCL原因编译hang住问题，尝试重启容器/开发机解决
+目前遇到过因NCCL原因编译hang住问题，尝试重启容器/开发机解决， 也可以尝试设置单卡编译解决
+
+```bash
+export CUDA_VISIBLE_DEVICES=0
+export CUDA_DEVICE_MAX_CONNECTIONS=1
+```
