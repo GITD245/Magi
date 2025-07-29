@@ -5,14 +5,13 @@
 ```bash
 git clone https://github.com/GITD245/Magi.git
 git clone https://github.com/GITD245/megatron-3.0.2
-git config --local user.name "GITD245"
-git config --local user.email "2456388197@qq.com"
 ```
 
 Magi 初始化
 
 ```bash
 cd /workspace/Magi
+git config --local user.name "GITD245" && git config --local user.email "2456388197@qq.com"
 pip install -r requirements.txt
 # 编译 推荐第二个
 python setup.py install
@@ -24,6 +23,7 @@ bear -- pip install -e . # 使用clangd
 
 ```bash
 cd /workspace/megatron-3.0.2
+git config --local user.name "GITD245" && git config --local user.email "2456388197@qq.com"
 # 加快编译速度 export MAX_JOBS=36
 bash examples/pretrain_gpt_distributed_magi.sh
 ```
@@ -38,14 +38,13 @@ source magi_env/bin/activate
 
 git clone https://github.com/GITD245/Magi.git
 git clone https://github.com/GITD245/megatron-3.0.2
-git config --local user.name "GITD245"
-git config --local user.email "2456388197@qq.com"
 ```
 
 Magi初始化
 
 ```bash
 cd /workspace/Magi
+git config --local user.name "GITD245" && git config --local user.email "2456388197@qq.com"
 pip install -r requirements.txt
 # 最后的cu根据实际版本切换
 pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
@@ -78,6 +77,7 @@ LIBEXT = $(shell /usr/bin/python3.10-config --extension-suffix)
 
 ```bash
 cd /workspace/megatron-3.0.2
+git config --local user.name "GITD245" && git config --local user.email "2456388197@qq.com"
 # 加快编译速度 export MAX_JOBS=36
 bash examples/pretrain_gpt_distributed_magi.sh
 ```
