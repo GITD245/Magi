@@ -101,3 +101,14 @@ nsys profile --output=my_report --stats true -t cuda,nvtx,cudnn,cublas --force-o
 export CUDA_VISIBLE_DEVICES=0
 export CUDA_DEVICE_MAX_CONNECTIONS=1
 ```
+
+设置指定 TORCH_CUDA_ARCH_LIST 加速编译
+
+```bash
+# 4090
+export TORCH_CUDA_ARCH_LIST="8.9"
+# A6000
+export TORCH_CUDA_ARCH_LIST="8.6"
+# H800
+export TORCH_CUDA_ARCH_LIST="9.0"
+```
