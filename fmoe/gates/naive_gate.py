@@ -36,6 +36,7 @@ class NaiveGate(BaseGate):
 
         # (BxL) x 1 x top_k
         gate_score = F.softmax(gate_top_k_val, dim=-1)
+        # gate_score = F.sigmoid(gate_top_k_val)
 
         # dummy loss
         self.set_loss(torch.zeros(1, requires_grad=True).to(inp.device))
