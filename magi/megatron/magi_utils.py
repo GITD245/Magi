@@ -1,9 +1,8 @@
 import argparse
 
 def add_magi_args(parser):
-    group = parser.add_argument_group(title="magi")
+    group = parser.add_argument_group(title="magi_config")
 
-    group.add_argument("--magi", action="store_true")
     group.add_argument("--model", type=str, default="", help="record model name for log")
     group.add_argument("--magi-profile-flag", action="store_true", help="whether to profile the time of expert layer")
 
